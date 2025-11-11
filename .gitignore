@@ -8,6 +8,11 @@ __pycache__/
 
 temp_data/
 
+# HDF5 datasets (too large for git)
+*.h5
+datasets/*.h5
+datasets/*.png
+
 # Distribution / packaging
 .Python
 build/

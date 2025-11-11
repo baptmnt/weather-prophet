@@ -58,7 +58,7 @@ def create_animation(nc_file, fps=2, figsize=(10, 8)):
         n_cats = 16
         cmap = plt.cm.get_cmap('tab20', n_cats)
         norm = mcolors.BoundaryNorm(range(n_cats + 1), cmap.N)
-        vmin, vmax = 0, 15
+        vmin, vmax = None, None  # Pas de vmin/vmax avec norm
     else:
         # Palette continue pour autres canaux
         cmap = 'viridis'
@@ -82,8 +82,7 @@ def create_animation(nc_file, fps=2, figsize=(10, 8)):
         
         # Afficher l'image
         if norm:
-            im = ax.imshow(frame_data, cmap=cmap, norm=norm, 
-                          vmin=vmin, vmax=vmax, origin='upper',
+            im = ax.imshow(frame_data, cmap=cmap, norm=norm, origin='upper',
                           extent=[float(data.lon.min()), float(data.lon.max()),
                                  float(data.lat.min()), float(data.lat.max())])
         else:
@@ -136,9 +135,18 @@ def create_animation(nc_file, fps=2, figsize=(10, 8)):
     
     return output_file
 
-def create_comparison_animation(nc_files, fps=2):
+def create_comparison_animation(nc_files, fps=2, zone_name=''):
     """
     Crée une animation avec plusieurs fichiers côte à côte
+    
+    Parameters:
+    -----------
+    nc_files : list
+        Liste de Path vers les fichiers NetCDF
+    fps : int
+        Images par seconde
+    zone_name : str
+        Nom de la zone (NW, SE, etc.) pour le nom du fichier
     """
     print(f"\n{'='*70}")
     print("CRÉATION D'UNE ANIMATION COMPARATIVE")
@@ -189,7 +197,7 @@ def create_comparison_animation(nc_files, fps=2):
             if var_name == 'CT':
                 cmap = plt.cm.get_cmap('tab20', 16)
                 norm = mcolors.BoundaryNorm(range(17), cmap.N)
-                vmin, vmax = 0, 15
+                vmin, vmax = None, None
             else:
                 cmap = 'viridis'
                 vmin = float(ds[var_name].min())
@@ -224,7 +232,8 @@ def create_comparison_animation(nc_files, fps=2):
     print(f"  Frame {n_times}/{n_times}... ✓")
     
     # Créer le GIF
-    output_file = OUTPUT_DIR / "comparison_animation.gif"
+    zone_suffix = f"_{zone_name}" if zone_name else ""
+    output_file = OUTPUT_DIR / f"comparison{zone_suffix}_animation.gif"
     print(f"\n  Création du GIF comparatif...")
     
     frames.extend([frames[-1]] * fps)
@@ -263,17 +272,49 @@ def main():
         except Exception as e:
             print(f"  ✗ Erreur: {e}")
     
-    # Créer une animation comparative avec les fichiers SE (même zone)
+    # Créer des animations comparatives en regroupant par ZONE + DATE
     print(f"\n{'='*70}")
-    print("PHASE 2: ANIMATION COMPARATIVE (fichiers SE)")
+    print("PHASE 2: ANIMATIONS COMPARATIVES (par zone et date)")
     print(f"{'='*70}")
     
-    se_files = [f for f in nc_files if '_SE_' in f.name]
-    if len(se_files) >= 2:
-        try:
-            create_comparison_animation(se_files[:4], fps=2)  # Max 4 pour lisibilité
-        except Exception as e:
-            print(f"  ✗ Erreur: {e}")
+    # Regrouper les fichiers par (zone, année)
+    groups = {}
+    for nc_file in nc_files:
+        # Extraire zone et année du nom de fichier
+        # Format attendu: XXX_ZONE_YYYY.nc (ex: CT_NW_2016.nc, IR039_SE_2016.nc)
+        parts = nc_file.stem.split('_')
+        
+        zone = None
+        year = None
+        
+        for part in parts:
+            if part in ['NW', 'SE']:
+                zone = part
+            elif part.isdigit() and len(part) == 4:
+                year = part
+        
+        if zone and year:
+            key = f"{zone}_{year}"
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(nc_file)
+    
+    print(f"\nGroupes trouvés: {len(groups)}")
+    for key, files in groups.items():
+        zone, year = key.split('_')
+        var_names = [list(xr.open_dataset(f, engine='h5netcdf').data_vars)[0] for f in files]
+        print(f"  {zone} {year}: {len(files)} fichiers ({', '.join(var_names)})")
+    
+    # Créer une animation comparative pour chaque groupe
+    for key, group_files in groups.items():
+        if len(group_files) >= 2:
+            zone, year = key.split('_')
+            print(f"\nCréation animation comparative pour {zone} {year}...")
+            try:
+                # Limiter à 6 fichiers max pour lisibilité
+                create_comparison_animation(group_files[:6], fps=2, zone_name=f"{zone}_{year}")
+            except Exception as e:
+                print(f"  ✗ Erreur: {e}")
     
     # Résumé
     print(f"\n{'='*70}")
