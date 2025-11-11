@@ -1,314 +1,365 @@
 """
-Exemple d'utilisation du dataset HDF5 avec PyTorch.
+Outil d'inspection et validation de dataset HDF5 MeteoNet.
 
-Définit un DataLoader PyTorch pour charger les données efficacement.
+Charge un fichier HDF5 et affiche des informations détaillées sur sa structure,
+son contenu et vérifie sa conformité.
 """
 
-import torch
-from torch.utils.data import Dataset, DataLoader
 import h5py
 import numpy as np
 from pathlib import Path
-from typing import Tuple, Optional
+import argparse
+import logging
+from typing import Optional
+
+# Configuration du logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
-class MeteoNetDataset(Dataset):
-    """
-    Dataset PyTorch pour le dataset MeteoNet HDF5.
+class DatasetInspector:
+    """Inspecte et valide un dataset HDF5 MeteoNet"""
     
-    Structure des données:
-        - Images: (n_timesteps, n_channels, height, width)
-        - Labels: (n_labels,) 
-        - Metadata: timestamp, station_id, coordinates
-    
-    Args:
-        h5_path: Chemin vers le fichier HDF5
-        transform: Transformations optionnelles à appliquer aux images
-        target_transform: Transformations optionnelles à appliquer aux labels
-        normalize: Si True, normalise les images par canal
-        handle_nans: Comment gérer les NaN - 'zero', 'mean', ou 'keep'
-    """
-    
-    def __init__(
-        self,
-        h5_path: Path,
-        transform=None,
-        target_transform=None,
-        normalize: bool = True,
-        handle_nans: str = 'zero'
-    ):
-        self.h5_path = h5_path
-        self.transform = transform
-        self.target_transform = target_transform
-        self.normalize = normalize
-        self.handle_nans = handle_nans
+    def __init__(self, h5_path: Path):
+        self.h5_path = Path(h5_path)
+        if not self.h5_path.exists():
+            raise FileNotFoundError(f"Dataset non trouvé: {self.h5_path}")
         
-        # Ouvrir le fichier en mode lecture pour accéder aux attributs
-        with h5py.File(self.h5_path, 'r') as f:
-            self.n_samples = f.attrs['n_samples']
-            self.n_timesteps = f.attrs['n_timesteps']
-            self.n_channels = f.attrs['n_channels']
-            self.image_height = f.attrs['image_height']
-            self.image_width = f.attrs['image_width']
-            self.channels = list(f.attrs['channels'])
-            self.target_vars = list(f.attrs['target_vars'])
-            self.timesteps = list(f.attrs['timesteps'])
-            
-            # Calculer les statistiques pour la normalisation si nécessaire
-            if self.normalize:
-                self._compute_normalization_stats()
+        logger.info(f"Ouverture du dataset: {self.h5_path}")
+        self.file = h5py.File(self.h5_path, 'r')
     
-    def _compute_normalization_stats(self):
-        """Calcule mean et std pour chaque canal (sur un échantillon)"""
-        print("Calcul des statistiques de normalisation...")
+    def __del__(self):
+        if hasattr(self, 'file'):
+            self.file.close()
+    
+    def print_file_structure(self):
+        """Affiche la structure complète du fichier HDF5"""
+        logger.info("\n" + "="*70)
+        logger.info("STRUCTURE DU FICHIER HDF5")
+        logger.info("="*70)
         
-        with h5py.File(self.h5_path, 'r') as f:
-            # Échantillonner pour calculer les stats (pas tout le dataset)
-            n_samples_for_stats = min(500, self.n_samples)
-            indices = np.random.choice(self.n_samples, n_samples_for_stats, replace=False)
-            indices = np.sort(indices)
+        def print_item(name, obj, indent=0):
+            prefix = "  " * indent
+            if isinstance(obj, h5py.Dataset):
+                logger.info(f"{prefix}📊 Dataset: {name}")
+                logger.info(f"{prefix}   Shape: {obj.shape}, Dtype: {obj.dtype}")
+                if obj.compression:
+                    logger.info(f"{prefix}   Compression: {obj.compression}")
+            elif isinstance(obj, h5py.Group):
+                logger.info(f"{prefix}📁 Groupe: {name}")
+        
+        self.file.visititems(lambda name, obj: print_item(name, obj, name.count('/')))
+    
+    def print_attributes(self):
+        """Affiche les attributs du fichier"""
+        logger.info("\n" + "="*70)
+        logger.info("ATTRIBUTS DU FICHIER")
+        logger.info("="*70)
+        
+        if len(self.file.attrs) == 0:
+            logger.warning("⚠ Aucun attribut trouvé!")
+            return
+        
+        for key, value in self.file.attrs.items():
+            if isinstance(value, (list, np.ndarray)):
+                logger.info(f"  {key}: {list(value)}")
+            else:
+                logger.info(f"  {key}: {value}")
+    
+    def validate_structure(self):
+        """Vérifie que la structure attendue est présente"""
+        logger.info("\n" + "="*70)
+        logger.info("VALIDATION DE LA STRUCTURE")
+        logger.info("="*70)
+        
+        errors = []
+        warnings = []
+        
+        # Vérifier datasets obligatoires
+        required_datasets = ['images', 'labels']
+        for ds_name in required_datasets:
+            if ds_name not in self.file:
+                errors.append(f"Dataset manquant: {ds_name}")
+            else:
+                logger.info(f"  ✓ Dataset '{ds_name}' présent")
+        
+        # Vérifier groupe metadata
+        if 'metadata' not in self.file:
+            warnings.append("Groupe 'metadata' manquant")
+        else:
+            logger.info(f"  ✓ Groupe 'metadata' présent")
             
-            sample_images = f['images'][indices]
+            # Vérifier contenus metadata
+            expected_meta = ['timestamps', 'station_ids', 'station_coords', 'station_heights', 'zones']
+            for meta_name in expected_meta:
+                full_path = f'metadata/{meta_name}'
+                if full_path not in self.file:
+                    warnings.append(f"Metadata manquant: {meta_name}")
+                else:
+                    logger.info(f"    ✓ '{meta_name}' présent")
+        
+        # Vérifier attributs importants
+        expected_attrs = ['n_samples', 'n_timesteps', 'n_channels', 'channels', 'target_vars']
+        for attr_name in expected_attrs:
+            if attr_name not in self.file.attrs:
+                warnings.append(f"Attribut manquant: {attr_name}")
+            else:
+                logger.info(f"  ✓ Attribut '{attr_name}' présent")
+        
+        # Afficher résultats
+        logger.info("")
+        if errors:
+            logger.error(f"❌ {len(errors)} erreur(s) critique(s):")
+            for err in errors:
+                logger.error(f"  - {err}")
+        
+        if warnings:
+            logger.warning(f"⚠ {len(warnings)} avertissement(s):")
+            for warn in warnings:
+                logger.warning(f"  - {warn}")
+        
+        if not errors and not warnings:
+            logger.info("✅ Structure conforme!")
+        
+        return len(errors) == 0
+    
+    def print_dataset_info(self):
+        """Affiche les informations détaillées sur le contenu"""
+        logger.info("\n" + "="*70)
+        logger.info("INFORMATIONS SUR LE DATASET")
+        logger.info("="*70)
+        
+        # Informations générales
+        if 'n_samples' in self.file.attrs:
+            n_samples = self.file.attrs['n_samples']
+            logger.info(f"\n📊 Nombre total de samples: {n_samples}")
+        
+        # Images
+        if 'images' in self.file:
+            images = self.file['images']
+            logger.info(f"\n🖼️  IMAGES:")
+            logger.info(f"  Shape: {images.shape}")
+            logger.info(f"  Dtype: {images.dtype}")
+            logger.info(f"  Taille: {images.nbytes / (1024**3):.2f} GB")
             
-            # Calculer mean et std par canal
-            self.channel_mean = []
-            self.channel_std = []
+            if 'n_timesteps' in self.file.attrs:
+                logger.info(f"  Timesteps: {list(self.file.attrs['timesteps'])}")
+            if 'channels' in self.file.attrs:
+                logger.info(f"  Canaux: {list(self.file.attrs['channels'])}")
+            if 'image_height' in self.file.attrs and 'image_width' in self.file.attrs:
+                logger.info(f"  Dimensions: {self.file.attrs['image_height']}×{self.file.attrs['image_width']}")
+        
+        # Labels
+        if 'labels' in self.file:
+            labels = self.file['labels']
+            logger.info(f"\n🎯 LABELS:")
+            logger.info(f"  Shape: {labels.shape}")
+            logger.info(f"  Dtype: {labels.dtype}")
             
-            for c_idx in range(self.n_channels):
-                channel_data = sample_images[:, :, c_idx, :, :]
+            if 'target_vars' in self.file.attrs:
+                logger.info(f"  Variables: {list(self.file.attrs['target_vars'])}")
+        
+        # Metadata
+        if 'metadata' in self.file:
+            logger.info(f"\n📋 METADATA:")
+            meta_group = self.file['metadata']
+            for key in meta_group.keys():
+                ds = meta_group[key]
+                logger.info(f"  {key}: shape={ds.shape}, dtype={ds.dtype}")
+    
+    def compute_statistics(self, sample_size: int = 100):
+        """Calcule des statistiques sur un échantillon du dataset"""
+        logger.info("\n" + "="*70)
+        logger.info(f"STATISTIQUES (échantillon de {sample_size} samples)")
+        logger.info("="*70)
+        
+        if 'images' not in self.file or 'labels' not in self.file:
+            logger.error("Impossible de calculer les statistiques: datasets manquants")
+            return
+        
+        n_samples = self.file['images'].shape[0]
+        sample_size = min(sample_size, n_samples)
+        
+        # Échantillonner aléatoirement
+        indices = np.random.choice(n_samples, sample_size, replace=False)
+        indices = np.sort(indices)
+        
+        # Images
+        logger.info("\n🖼️  STATISTIQUES DES IMAGES:")
+        images_sample = self.file['images'][indices]
+        
+        logger.info(f"  Min global: {np.nanmin(images_sample):.2f}")
+        logger.info(f"  Max global: {np.nanmax(images_sample):.2f}")
+        logger.info(f"  Mean global: {np.nanmean(images_sample):.2f}")
+        logger.info(f"  Std global: {np.nanstd(images_sample):.2f}")
+        
+        # Pourcentage de NaN
+        nan_count = np.isnan(images_sample).sum()
+        total_values = images_sample.size
+        nan_percent = 100 * nan_count / total_values
+        logger.info(f"  NaN: {nan_count}/{total_values} ({nan_percent:.2f}%)")
+        
+        # Stats par canal si possible
+        if 'channels' in self.file.attrs:
+            channels = list(self.file.attrs['channels'])
+            logger.info(f"\n  Par canal:")
+            for c_idx, channel in enumerate(channels):
+                channel_data = images_sample[:, :, c_idx, :, :]
                 valid_data = channel_data[np.isfinite(channel_data)]
+                if len(valid_data) > 0:
+                    logger.info(f"    {channel}: mean={valid_data.mean():.2f}, std={valid_data.std():.2f}, "
+                              f"min={valid_data.min():.2f}, max={valid_data.max():.2f}")
+                else:
+                    logger.warning(f"    {channel}: aucune donnée valide")
+        
+        # Labels
+        logger.info("\n🎯 STATISTIQUES DES LABELS:")
+        labels_sample = self.file['labels'][indices]
+        
+        if 'target_vars' in self.file.attrs:
+            target_vars = list(self.file.attrs['target_vars'])
+            for l_idx, var in enumerate(target_vars):
+                var_data = labels_sample[:, l_idx]
+                valid_data = var_data[np.isfinite(var_data)]
                 
                 if len(valid_data) > 0:
-                    self.channel_mean.append(float(valid_data.mean()))
-                    self.channel_std.append(float(valid_data.std()))
+                    logger.info(f"  {var}:")
+                    logger.info(f"    Valides: {len(valid_data)}/{len(var_data)} ({100*len(valid_data)/len(var_data):.1f}%)")
+                    logger.info(f"    Mean: {valid_data.mean():.2f}, Std: {valid_data.std():.2f}")
+                    logger.info(f"    Min: {valid_data.min():.2f}, Max: {valid_data.max():.2f}")
                 else:
-                    self.channel_mean.append(0.0)
-                    self.channel_std.append(1.0)
-            
-            print(f"  Mean par canal: {[f'{m:.2f}' for m in self.channel_mean]}")
-            print(f"  Std par canal: {[f'{s:.2f}' for s in self.channel_std]}")
+                    logger.warning(f"  {var}: aucune donnée valide")
     
-    def __len__(self) -> int:
-        return self.n_samples
-    
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, dict]:
-        """
-        Retourne un sample du dataset.
+    def check_data_quality(self):
+        """Vérifie la qualité des données"""
+        logger.info("\n" + "="*70)
+        logger.info("CONTRÔLE QUALITÉ")
+        logger.info("="*70)
         
-        Returns:
-            images: Tensor de shape (n_timesteps, n_channels, height, width)
-            labels: Tensor de shape (n_labels,)
-            metadata: Dict avec timestamp, station_id, coords
-        """
-        # Ouvrir le fichier HDF5 (chaque worker aura sa propre connexion)
-        with h5py.File(self.h5_path, 'r') as f:
-            # Charger les images
-            images = f['images'][idx].astype(np.float32)
-            
-            # Charger les labels
-            labels = f['labels'][idx].astype(np.float32)
-            
-            # Charger metadata
-            metadata = {
-                'timestamp': f['metadata/timestamps'][idx].decode('utf-8'),
-                'station_id': int(f['metadata/station_ids'][idx]),
-                'station_coords': f['metadata/station_coords'][idx].astype(np.float32),
-                'station_height': float(f['metadata/station_heights'][idx]),
-                'zone': f['metadata/zones'][idx].decode('utf-8'),
-            }
+        issues = []
         
-        # Gérer les NaN dans les images
-        if self.handle_nans == 'zero':
-            images = np.nan_to_num(images, nan=0.0)
-        elif self.handle_nans == 'mean':
-            for c_idx in range(self.n_channels):
-                channel_data = images[:, c_idx, :, :]
-                if self.normalize:
-                    fill_value = self.channel_mean[c_idx]
+        # Vérifier cohérence des shapes
+        if 'images' in self.file and 'labels' in self.file:
+            n_img = self.file['images'].shape[0]
+            n_lbl = self.file['labels'].shape[0]
+            
+            if n_img == n_lbl:
+                logger.info(f"  ✓ Cohérence images/labels: {n_img} samples")
+            else:
+                issues.append(f"Incohérence images ({n_img}) vs labels ({n_lbl})")
+        
+        # Vérifier metadata
+        if 'metadata' in self.file:
+            meta_group = self.file['metadata']
+            n_samples = self.file['images'].shape[0] if 'images' in self.file else 0
+            
+            for key in meta_group.keys():
+                meta_len = meta_group[key].shape[0]
+                if meta_len != n_samples:
+                    issues.append(f"Metadata '{key}': {meta_len} entrées vs {n_samples} samples")
                 else:
-                    fill_value = np.nanmean(channel_data)
-                    if np.isnan(fill_value):
-                        fill_value = 0.0
-                channel_data[np.isnan(channel_data)] = fill_value
-                images[:, c_idx, :, :] = channel_data
-        # Si 'keep', on garde les NaN (pas recommandé pour l'entraînement)
+                    logger.info(f"  ✓ Metadata '{key}': {meta_len} entrées")
         
-        # Normaliser si demandé
-        if self.normalize:
-            for c_idx in range(self.n_channels):
-                images[:, c_idx, :, :] = (images[:, c_idx, :, :] - self.channel_mean[c_idx]) / (self.channel_std[c_idx] + 1e-8)
-        
-        # Convertir en tensors PyTorch
-        images_tensor = torch.from_numpy(images)
-        labels_tensor = torch.from_numpy(labels)
-        
-        # Appliquer les transformations si fournies
-        if self.transform:
-            images_tensor = self.transform(images_tensor)
-        
-        if self.target_transform:
-            labels_tensor = self.target_transform(labels_tensor)
-        
-        return images_tensor, labels_tensor, metadata
+        # Afficher résultats
+        if issues:
+            logger.error(f"\n❌ {len(issues)} problème(s) détecté(s):")
+            for issue in issues:
+                logger.error(f"  - {issue}")
+            return False
+        else:
+            logger.info("\n✅ Qualité des données OK!")
+            return True
     
-    def get_channel_names(self):
-        """Retourne les noms des canaux"""
-        return self.channels
-    
-    def get_target_names(self):
-        """Retourne les noms des variables cibles"""
-        return self.target_vars
-    
-    def get_timesteps(self):
-        """Retourne les timesteps utilisés"""
-        return self.timesteps
+    def full_inspection(self, sample_size: int = 100):
+        """Lance une inspection complète du dataset"""
+        logger.info("\n" + "="*70)
+        logger.info(f"INSPECTION COMPLÈTE: {self.h5_path.name}")
+        logger.info("="*70)
+        logger.info(f"Taille du fichier: {self.h5_path.stat().st_size / (1024**2):.2f} MB")
+        
+        self.print_file_structure()
+        self.print_attributes()
+        self.print_dataset_info()
+        
+        is_valid = self.validate_structure()
+        is_quality = self.check_data_quality()
+        
+        self.compute_statistics(sample_size)
+        
+        logger.info("\n" + "="*70)
+        logger.info("RÉSUMÉ")
+        logger.info("="*70)
+        if is_valid and is_quality:
+            logger.info("✅ Dataset conforme et de bonne qualité")
+        elif is_valid:
+            logger.warning("⚠️ Dataset conforme mais avec des problèmes de qualité")
+        else:
+            logger.error("❌ Dataset non conforme")
+        logger.info("="*70)
 
 
-def create_dataloaders(
-    dataset_path: Path,
-    batch_size: int = 32,
-    train_split: float = 0.7,
-    val_split: float = 0.15,
-    num_workers: int = 4,
-    seed: int = 42
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """
-    Crée les DataLoaders train/val/test à partir du dataset HDF5.
-    
-    Args:
-        dataset_path: Chemin vers le fichier HDF5
-        batch_size: Taille des batchs
-        train_split: Proportion du dataset pour l'entraînement
-        val_split: Proportion du dataset pour la validation
-        num_workers: Nombre de workers pour le chargement parallèle
-        seed: Seed pour la reproductibilité
-    
-    Returns:
-        train_loader, val_loader, test_loader
-    """
-    # Créer le dataset complet
-    full_dataset = MeteoNetDataset(dataset_path, normalize=True, handle_nans='zero')
-    
-    # Calculer les tailles des splits
-    dataset_size = len(full_dataset)
-    train_size = int(train_split * dataset_size)
-    val_size = int(val_split * dataset_size)
-    test_size = dataset_size - train_size - val_size
-    
-    print(f"\nSplits du dataset:")
-    print(f"  Train: {train_size} samples ({100*train_split:.0f}%)")
-    print(f"  Validation: {val_size} samples ({100*val_split:.0f}%)")
-    print(f"  Test: {test_size} samples ({100*(1-train_split-val_split):.0f}%)")
-    
-    # Split aléatoire
-    torch.manual_seed(seed)
-    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
-        full_dataset, [train_size, val_size, test_size]
-    )
-    
-    # Créer les DataLoaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True
-    )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True
-    )
-    
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True
-    )
-    
-    return train_loader, val_loader, test_loader
+def main():
+    """Point d'entrée principal avec arguments CLI"""
+    parser = argparse.ArgumentParser(
+        description="Inspection et validation de dataset HDF5 MeteoNet",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples d'usage:
+  # Inspecter un dataset
+  python pytorch_dataloader.py --dataset path/to/meteonet_SE_2016.h5
 
+  # Inspecter avec plus de samples pour les stats
+  python pytorch_dataloader.py --dataset path/to/meteonet.h5 --sample-size 500
 
-def demo_usage():
-    """Démo d'utilisation du DataLoader"""
-    
-    # Chemin du dataset
-    dataset_path = Path(r"d:\Documents\Scolarité\5 - INSA Lyon\4TCA\S3\TIP\Projet\weather-prophet\datasets\meteonet_SE_2016_20160101.h5")
-    
-    if not dataset_path.exists():
-        print(f"❌ Dataset non trouvé: {dataset_path}")
-        return
-    
-    print(f"📂 Chargement du dataset: {dataset_path.name}")
-    
-    # Créer les DataLoaders
-    train_loader, val_loader, test_loader = create_dataloaders(
-        dataset_path,
-        batch_size=16,
-        train_split=0.7,
-        val_split=0.15,
-        num_workers=0  # 0 pour debug, augmenter pour production
+  # Mode verbeux
+  python pytorch_dataloader.py --dataset path/to/meteonet.h5 -v
+        """
     )
     
-    # Tester le chargement d'un batch
-    print("\n" + "="*70)
-    print("TEST DE CHARGEMENT D'UN BATCH")
-    print("="*70)
+    parser.add_argument('--dataset', type=str, required=False, metavar='PATH',
+                        help="Chemin vers le fichier HDF5 (cherche dans ./datasets/ si non fourni)")
+    parser.add_argument('--sample-size', type=int, default=100, metavar='N',
+                        help="Nombre de samples pour calcul des statistiques (défaut: 100)")
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help="Affichage verbeux (niveau DEBUG)")
+    parser.add_argument('--quiet', '-q', action='store_true',
+                        help="Affichage minimal (niveau WARNING)")
     
-    # Obtenir un batch du train loader
-    images, labels, metadata = next(iter(train_loader))
+    args = parser.parse_args()
     
-    print(f"\nBatch d'entraînement:")
-    print(f"  Images shape: {images.shape}")  # (batch, timesteps, channels, h, w)
-    print(f"  Labels shape: {labels.shape}")  # (batch, n_labels)
-    print(f"  Metadata keys: {metadata.keys()}")
+    # Ajuster logging
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+    elif args.quiet:
+        logger.setLevel(logging.WARNING)
     
-    print(f"\nStatistiques du batch:")
-    print(f"  Images - min: {images.min():.2f}, max: {images.max():.2f}, mean: {images.mean():.2f}")
-    
-    # Filtrer les NaN pour calculer min/max des labels
-    labels_valid = labels[~torch.isnan(labels)]
-    if len(labels_valid) > 0:
-        print(f"  Labels - min: {labels_valid.min():.2f}, max: {labels_valid.max():.2f}, mean: {labels_valid.mean():.2f}")
+    # Déterminer le chemin du dataset
+    if args.dataset:
+        dataset_path = Path(args.dataset)
     else:
-        print(f"  Labels - Toutes les valeurs sont NaN")
+        # Chercher dans le dossier datasets/
+        datasets_dir = Path(__file__).parent.parent / "datasets"
+        if datasets_dir.exists():
+            h5_files = list(datasets_dir.glob("*.h5"))
+            if h5_files:
+                dataset_path = h5_files[0]
+                logger.info(f"Dataset auto-détecté: {dataset_path}")
+            else:
+                logger.error("Aucun fichier .h5 trouvé dans ./datasets/")
+                return
+        else:
+            logger.error("Dossier ./datasets/ introuvable. Spécifiez --dataset")
+            return
     
-    print(f"\nExemple de metadata du premier sample:")
-    print(f"  Timestamp: {metadata['timestamp'][0]}")
-    print(f"  Station ID: {metadata['station_id'][0]}")
-    print(f"  Coordinates: lat={metadata['station_coords'][0][0]:.2f}, lon={metadata['station_coords'][0][1]:.2f}")
-    print(f"  Zone: {metadata['zone'][0]}")
-    
-    # Test d'itération complète sur quelques batchs
-    print(f"\n" + "="*70)
-    print("TEST D'ITÉRATION")
-    print("="*70)
-    
-    for i, (images, labels, metadata) in enumerate(train_loader):
-        if i >= 3:  # Juste 3 batchs pour le test
-            break
-        print(f"  Batch {i+1}: {images.shape[0]} samples chargés")
-    
-    print("\n✅ DataLoader fonctionne correctement!")
-    
-    # Informations pour utilisation dans un modèle
-    dataset = train_loader.dataset.dataset  # Accéder au dataset original
-    print(f"\n" + "="*70)
-    print("INFORMATIONS POUR L'ENTRAÎNEMENT")
-    print("="*70)
-    print(f"\nNombre de canaux: {dataset.n_channels}")
-    print(f"Canaux: {dataset.get_channel_names()}")
-    print(f"Timesteps: {dataset.get_timesteps()}")
-    print(f"Taille images: {dataset.image_height}×{dataset.image_width}")
-    print(f"\nVariables cibles ({len(dataset.get_target_names())}):")
-    for i, var in enumerate(dataset.get_target_names()):
-        print(f"  {i}: {var}")
+    # Lancer l'inspection
+    try:
+        inspector = DatasetInspector(dataset_path)
+        inspector.full_inspection(sample_size=args.sample_size)
+    except FileNotFoundError as e:
+        logger.error(str(e))
+    except Exception as e:
+        logger.error(f"Erreur lors de l'inspection: {e}", exc_info=True)
 
 
 if __name__ == "__main__":
-    demo_usage()
+    main()
