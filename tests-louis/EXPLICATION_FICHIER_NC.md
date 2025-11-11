@@ -3,6 +3,7 @@
 ## 🎯 Qu'est-ce qu'un fichier NetCDF (.nc) ?
 
 **NetCDF** (Network Common Data Form) est un format de fichier autodescriptif pour stocker des données scientifiques multidimensionnelles. Il contient :
+
 - Les **données** (valeurs numériques)
 - Les **métadonnées** (descriptions, unités, coordonnées)
 - Les **dimensions** (temps, latitude, longitude, etc.)
@@ -11,11 +12,11 @@
 
 ### Structure des données
 
-```
+```text
 Tableau 3D : (9, 188, 261)
-           │   │    └─► 261 points de longitude
-           │   └──────► 188 points de latitude  
-           └──────────► 9 pas de temps
+              │   │    └─► 261 points de longitude
+              │   └──────► 188 points de latitude  
+              └──────────► 9 pas de temps
 ```
 
 **Taille totale** : 9 × 188 × 261 = **441,828 pixels** = 431.3 KB
@@ -28,13 +29,15 @@ Tableau 3D : (9, 188, 261)
 | **Longitude** | -5.84° → 2.00° E | 0.03° (~3 km) | Atlantique → Est France |
 
 **Zone couverte** : Nord-Ouest de la France (NW)
+
 - Inclut : Bretagne, Normandie, Pays de la Loire, région parisienne
 - Surface : ~565 km (lat) × ~550 km (lon)
 
 ### ⏰ Coordonnées temporelles
 
 **9 instants** espacés de 15 minutes :
-```
+
+```text
 [0] 2016-01-01 00:00:00
 [1] 2016-01-01 00:15:00
 [2] 2016-01-01 00:30:00
@@ -78,7 +81,7 @@ Tableau 3D : (9, 188, 261)
 
 ### Structure de l'image
 
-```
+```text
 ┌─────────────────┬─────────────────┐
 │   00:00:00      │   00:30:00      │  ← Haut : début de période
 ├─────────────────┼─────────────────┤
@@ -98,16 +101,19 @@ Tableau 3D : (9, 188, 261)
 ### Interprétation météorologique
 
 #### Zone JAUNE (Sud-Ouest, ~latitude 47-48°)
+
 - **Signification** : Ciel dégagé sur l'océan Atlantique et le sud-ouest de la France
 - **Surface** : ~50% de la zone (1-2)
 - **Stabilité** : Zone stable sur toute la période
 
 #### Zone VERTE (Centre, bandes horizontales)
+
 - **Signification** : Nuages bas, brouillard, stratus
 - **Altitude** : < 2000m
 - **Risque** : Visibilité réduite au sol
 
 #### Zone VIOLETTE (Nord et Est dominant)
+
 - **Signification** : Système nuageux d'altitude (cirrus, cirrostratus)
 - **Altitude** : > 6000m
 - **Interprétation** : Front chaud ou perturbation en approche
@@ -115,13 +121,14 @@ Tableau 3D : (9, 188, 261)
 
 ### Évolution temporelle observable
 
-```
+```text
 00:00 → 00:30 : Stabilité relative, légère progression du système haut
 00:30 → 01:30 : Extension des nuages bas vers le centre
 01:30 → 02:15 : Développement marqué de nuages bas au sud
 ```
 
 **Dynamique générale** :
+
 - Maintien de la zone dégagée au sud-ouest
 - Évolution lente du système d'altitude (violet)
 - Variabilité rapide des nuages bas (vert)
@@ -129,26 +136,31 @@ Tableau 3D : (9, 188, 261)
 ## 🔬 Utilisations scientifiques
 
 ### 1. Nowcasting (prévision 0-3h)
+
 - Suivi en temps réel des formations nuageuses
 - Prédiction de l'évolution à très court terme
 - Détection de systèmes convectifs
 
 ### 2. Analyse synoptique
+
 - Identification de fronts météorologiques
 - Caractérisation de masses d'air
 - Suivi de perturbations
 
 ### 3. Validation de modèles
+
 - Comparaison avec sorties de modèles numériques (AROME, ARPEGE)
 - Évaluation de la qualité des prévisions
 - Ajustement des paramétrisations
 
 ### 4. Machine Learning
+
 - **Input** pour modèles de prévision
 - Classification automatique de types de temps
 - Prédiction de précipitations
 
 ### 5. Climatologie
+
 - Statistiques sur couverture nuageuse
 - Étude de la variabilité saisonnière
 - Analyse de tendances
@@ -157,7 +169,7 @@ Tableau 3D : (9, 188, 261)
 
 ### Structure interne du fichier
 
-```
+```text
 CT_NW_2016.nc
 ├── Dimensions
 │   ├── time: 9
@@ -221,11 +233,13 @@ lons = data.lon.values    # array de float64
 ## 🌍 Contexte géographique
 
 **Zone NW (Nord-Ouest)** couvre approximativement :
+
 - **Régions françaises** : Bretagne, Normandie, Pays de la Loire, Hauts-de-France (partie), Île-de-France
 - **Pays voisins** : Sud de l'Angleterre, Belgique (partie)
 - **Océan** : Manche, partie de l'Atlantique
 
 **Particularités climatiques** :
+
 - Influence océanique forte
 - Variabilité rapide
 - Fréquence élevée de nuages bas
