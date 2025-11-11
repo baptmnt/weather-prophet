@@ -48,13 +48,82 @@ pip install xarray h5netcdf h5py numpy pandas matplotlib torch torchvision image
 
 Le script `tests-louis/create_ml_dataset.py` combine les données satellites (.nc) et stations au sol (CSV) en un seul fichier HDF5 optimisé.
 
-**✨ Optimisations v2.1 (Pré-indexation + Vectorisation)** :
+#### 🎯 Filtrer uniquement la station de Bron (ID 69029001)
 
-- 🚀 **Étape 1 - Pré-indexation temporelle** : 8-71x plus rapide grâce à la recherche dichotomique O(log n)
-- ⚡ **Étape 2 - Vectorisation par timestamp** : 14.6x plus rapide en groupant les requêtes
-- 🎯 **Gain cumulé** : 117-1036x plus rapide que la version initiale
-- 📊 Réduction de 95% des chargements d'images redondants
-- 💾 Cache intelligent multi-niveaux pour réutilisation maximale
+Pour ce projet, nous nous concentrons uniquement sur la station de Bron, près de Lyon (ID MeteoNet: 69029001).
+
+- Windows PowerShell (depuis la racine du repo):
+
+```powershell
+python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 --data-root ".\meteonet\data_samples" --num-workers 1 --station-id 69029001
+```
+
+- Linux/macOS:
+
+```bash
+python weather-prophet/tests-louis/create_ml_dataset.py --zone SE --year 2016 --data-root ./meteonet/data_samples --num-workers 1 --station-id 69029001
+```
+
+Sortie attendue:
+
+- Fichier: `meteonet_SE_2016_sta69029001.h5`
+- Taille: ~1.7 MB
+- Temps d’exécution: ~9 s (chargement + indexation + écriture gzip)
+
+#### ⚠️ Activation du venv (Important !)
+
+**Sur Windows PowerShell** :
+
+```powershell
+# Se placer à la racine du projet
+cd "d:\Documents\Scolarité\5 - INSA Lyon\4TCA\S3\TIP\Projet"
+
+# Activer le venv
+& .\.venv\Scripts\Activate.ps1
+
+# Maintenant vous pouvez utiliser les scripts
+cd weather-prophet\tests-louis
+python create_ml_dataset.py --help
+```
+
+**Sur Linux/macOS** :
+
+```bash
+# Se placer à la racine du projet
+cd /path/to/projet
+
+# Activer le venv
+source .venv/bin/activate
+
+# Maintenant vous pouvez utiliser les scripts
+cd weather-prophet/tests-louis
+python create_ml_dataset.py --help
+```
+
+💡 **Astuce** : Une fois le venv activé, vous verrez `(.venv)` au début de votre prompt.
+
+#### ✨ Optimisations v2.2 — récapitulatif synthétique
+
+- 🚀 Pré-indexation temporelle (bisect O(log n)) — Gain mesuré: 8–71×
+- ⚡ Vectorisation par timestamp (groupby des datetime) — Gain: 14.6×, ~95% d’I/O disque en moins
+- 🧠 Cache multi-niveaux (images uniques + multi-temporel)
+- 🧵 Parallélisation multi-processus par chunks de timestamps
+  - Problème initial: un seul CPU utilisé
+  - Solution: découper en batches de timestamps pour paralléliser le travail
+  - Gain: utilise tous les cœurs disponibles → ~4–8× selon le nombre de cœurs (Linux/macOS)
+  - Note: sur Windows, l’overhead de spawn peut annuler le gain; le mode séquentiel reste recommandé
+- 💾 Écriture HDF5 directe (fin des .npz intermédiaires lents)
+  - Suppression de `np.savez_compressed` et des merges intermédiaires
+  - Nouveau flux: comptage des samples valides → pré-allocation exacte → remplissage direct → écriture HDF5
+  - Résultat mesuré (SE 2016, 4767 samples): ~2 min 40 s avec gzip (fichier ~92 MB)
+  - Station unique (Bron, 10 samples): ~9 s (fichier ~1.7 MB)
+- 🧮 Mémoire optimisée: pré-allocation EXACTE (deux passes)
+  - Évite l’allocation catastrophique (ex: 371 GiB) en allouant uniquement le nombre de samples valides
+
+Résumé rapide des gains récents:
+
+- 14 min → ~2 min 40 s pour 4767 samples (gzip activé)
+- Single station (Bron) en ~9 s
 
 ```bash
 cd tests-louis
@@ -67,11 +136,10 @@ python create_ml_dataset.py \
     --data-root ../data \
     --zone SE \
     --year 2016 \
-    --output-dir ./datasets \
-    --station-id 7149 \
-    --save-intermediate \
-    --chunk-size 500
+    --output-dir ./datasets
 ```
+
+ℹ️ Remarque: la génération s’effectue désormais en **un seul passage** avec **écriture HDF5 directe** (compression gzip). Les fichiers `.npz` intermédiaires ont été retirés car trop lents; l’option `--save-intermediate` n’est plus nécessaire dans le flux par défaut.
 
 **Arguments disponibles** :
 
@@ -80,11 +148,73 @@ python create_ml_dataset.py \
 - `--year` : Année des fichiers satellites (défaut : `2016`)
 - `--output-dir` : Dossier de sortie (défaut : `data/<ZONE>/datasets/`)
 - `--station-id` : Filtrer sur une station spécifique (optionnel)
-- `--save-intermediate` : Sauvegarder des chunks intermédiaires .npz
+- `--save-intermediate` : (option legacy) écrit des chunks `.npz` temporaires puis merge; non recommandé sauf besoin spécifique
 - `--chunk-size` : Taille des chunks (défaut : 500 samples)
+- `--num-workers` : Nombre de processus parallèles (voir section Parallélisation ci-dessous)
 - `--build-final` : Merger des chunks existants sans reconstruire
 - `--merge-start` / `--merge-end` : Sélectionner la plage de chunks à merger
 - `--intermediate-dir` : Dossier pour fichiers temporaires
+
+💡 **Astuce** : Pour traiter de gros datasets (plusieurs jours/mois), utilisez **toujours** `--save-intermediate` pour éviter de saturer la RAM et accélérer l'écriture finale.
+
+#### ⚡ Parallélisation (optionnel)
+
+Le script supporte le traitement parallèle via l'argument `--num-workers` :
+
+```bash
+# Mode séquentiel (défaut, recommandé)
+python create_ml_dataset.py --num-workers 1
+
+# Mode parallèle (4 workers)
+python create_ml_dataset.py --num-workers 4
+
+# Auto (utilise tous les CPUs disponibles)
+python create_ml_dataset.py --num-workers 0
+
+# Sans argument : question interactive au lancement
+python create_ml_dataset.py
+```
+
+**Configuration interactive** :
+
+Si vous n'utilisez pas `--num-workers`, le script vous posera la question au démarrage :
+
+```text
+======================================================================
+⚙️  CONFIGURATION DE LA PARALLÉLISATION
+======================================================================
+
+Votre machine dispose de 8 CPU(s).
+
+Options de parallélisation:
+  • 1 worker  : Mode séquentiel (recommandé pour Windows, stable)
+  • 2-4 workers : Parallélisation modérée (peut ralentir sur Windows)
+  • 0 (auto)  : Tous les CPUs disponibles
+
+⚠️  Note: Sur Windows, la parallélisation ajoute un overhead significatif
+   et peut être PLUS LENTE que le mode séquentiel. Le mode séquentiel
+   est déjà très rapide grâce aux optimisations (pré-indexation + vectorisation).
+
+Nombre de workers à utiliser [défaut: 1] : _
+```
+
+**⚠️ Important - Parallélisation sur Windows** :
+
+- ❌ **Sur Windows**, la parallélisation peut être **PLUS LENTE** qu'en mode séquentiel
+- 🐌 **Overhead significatif** : Windows utilise `spawn` au lieu de `fork` → chaque processus doit réimporter tous les modules
+- ✅ **Mode séquentiel recommandé** : Les optimisations de pré-indexation + vectorisation rendent le mode séquentiel déjà très rapide (117-1036x)
+- 🚀 **Sur Linux/macOS** : La parallélisation peut apporter un gain de 2-4x supplémentaire
+
+**Résultats de benchmarks (Windows)** :
+
+| Workers | Temps (1000 items) | Efficacité | Recommandation |
+|---------|-------------------|------------|----------------|
+| 1       | 1.00s            | 100%       | ✅ **Recommandé** |
+| 2       | 1.15s            | 44%        | ⚠️ Plus lent |
+| 4       | 1.10s            | 23%        | ⚠️ Plus lent |
+| 8       | 1.52s            | 8%         | ❌ Bien plus lent |
+
+💡 **Conclusion** : Utilisez `--num-workers 1` (ou laissez la valeur par défaut) pour des performances optimales sur Windows.
 
 **Configuration** (à modifier dans le script si nécessaire) :
 
@@ -120,9 +250,23 @@ year = 2016
 
 **Temps d'exécution** :
 
-- ⚡ **v2.1 optimisé** : ~0.5-2 secondes pour 1 jour de données (117-1036x plus rapide)
+- ⚡ **v2.1 optimisé (mode séquentiel avec --save-intermediate)** : ~0.5-2 secondes pour 1 jour de données
+- 🚀 **Performance totale** : 117-1036x plus rapide que la version initiale
 - 📦 **Mode chunks** : Traite par blocs de 500 samples pour éviter la saturation mémoire
-- 🎯 **83,000 samples** : Estimé à ~12-30 secondes au lieu de plusieurs heures
+- 🎯 **Exemple réel** : 4767 samples (1 jour) traités en ~14 minutes avec `--save-intermediate`
+- ⚠️ **Sans --save-intermediate** : Beaucoup plus lent car tout est stocké en RAM puis écrit d'un coup
+- ⚠️ **Parallélisation Windows** : Plus lente que le mode séquentiel (overhead), non recommandée
+
+**Optimisations appliquées** :
+
+| Étape | Technique | Gain mesuré | Description |
+|-------|-----------|-------------|-------------|
+| 1️⃣ | Pré-indexation temporelle | 8-71x | Recherche dichotomique O(log n) au lieu de O(n) |
+| 2️⃣ | Vectorisation par timestamp | 14.6x | Groupement des stations, réduction I/O de 95% |
+| 🎯 | **Gain cumulé** | **117-1036x** | Les deux optimisations se multiplient |
+| 3️⃣ | Parallélisation (Linux/macOS) | 2-4x | Gain additionnel sur systèmes Unix uniquement |
+
+💡 **Note** : La parallélisation n'est pas utile sur Windows en raison de l'overhead du mécanisme `spawn`. Le mode séquentiel optimisé est déjà extrêmement rapide.
 
 ---
 
