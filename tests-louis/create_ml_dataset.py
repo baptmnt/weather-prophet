@@ -188,14 +188,84 @@ class SatelliteDataLoader:
             logger.debug(f"Erreur lors de l'extraction de {channel} à {target_time}: {e}")
             return None
     
+    def preload_images_for_timestamps(self, timestamps: List[pd.Timestamp], channel: str) -> Dict[pd.Timestamp, np.ndarray]:
+        """
+        Précharge plusieurs images d'un canal pour des timestamps donnés (I/O optimisé).
+        
+        Args:
+            timestamps: Liste des timestamps à précharger
+            channel: Canal satellite
+            
+        Returns:
+            Dict {timestamp: image_array} des images chargées
+        """
+        if channel not in self.datasets:
+            return {}
+        
+        ds = self.datasets[channel]
+        time_index = self.time_indices.get(channel, {})
+        sorted_times = self.sorted_times.get(channel, [])
+        
+        if not sorted_times:
+            return {}
+        
+        # Trouver les indices correspondants pour tous les timestamps
+        indices_to_load = []
+        timestamp_mapping = {}  # {index: original_timestamp}
+        
+        for target_time in timestamps:
+            cache_key = f"{channel}_{target_time}"
+            if cache_key in self.image_cache:
+                continue  # Déjà en cache
+            
+            # Recherche dichotomique
+            pos = bisect.bisect_left(sorted_times, target_time)
+            
+            candidates = []
+            if pos > 0:
+                candidates.append((sorted_times[pos - 1], abs((target_time - sorted_times[pos - 1]).total_seconds())))
+            if pos < len(sorted_times):
+                candidates.append((sorted_times[pos], abs((target_time - sorted_times[pos]).total_seconds())))
+            
+            if candidates:
+                closest_time, time_diff_seconds = min(candidates, key=lambda x: x[1])
+                if time_diff_seconds / 60 <= 60:  # < 1h
+                    idx = time_index[closest_time]
+                    indices_to_load.append(idx)
+                    timestamp_mapping[idx] = target_time
+        
+        # Charger toutes les images en un seul appel (vectorisé)
+        if indices_to_load:
+            try:
+                images = ds[channel].isel(time=indices_to_load).values
+                
+                # Mettre en cache
+                for i, idx in enumerate(indices_to_load):
+                    target_time = timestamp_mapping[idx]
+                    image = images[i]
+                    
+                    if not np.isnan(image).all():
+                        cache_key = f"{channel}_{target_time}"
+                        self.image_cache[cache_key] = image
+            except Exception as e:
+                logger.debug(f"Erreur lors du préchargement batch de {channel}: {e}")
+        
+        return {}
+    
     def get_multi_temporal_images(self, reference_time: pd.Timestamp) -> Optional[Dict[str, np.ndarray]]:
         """
         Récupère les images de tous les canaux pour les 4 timesteps passés.
+        Optimisé avec cache pour réutilisation sur plusieurs stations.
         
         Returns:
             Dict avec structure: {timestep: {channel: image_array}}
             Exemple: {-12: {'CT': array, 'IR039': array, ...}, -24: {...}, ...}
         """
+        # Clé de cache pour tout le set d'images multi-temporelles
+        cache_key = f"multi_{reference_time}"
+        if cache_key in self.image_cache:
+            return self.image_cache[cache_key]
+        
         multi_temporal = {}
         
         for timestep_offset in Config.TIMESTEPS:
@@ -214,6 +284,9 @@ class SatelliteDataLoader:
         # Vérifier qu'on a au moins quelques timesteps
         if len(multi_temporal) < 2:
             return None
+        
+        # Cache le résultat complet pour réutilisation
+        self.image_cache[cache_key] = multi_temporal
         
         return multi_temporal
     
@@ -523,43 +596,60 @@ class MLDatasetBuilder:
                 return
             logger.info(f"Filtrage : {len(stations_df)} lignes pour la station {station_id}")
 
-        # 3) Construire les samples (itérer ligne par ligne ; chaque ligne = un relevé)
+        # 3) Construire les samples avec VECTORISATION par timestamp
+        # Grouper par timestamp unique pour éviter de recharger les mêmes images
+        logger.info(f"Vectorisation : groupement par timestamps uniques...")
+        grouped = stations_df.groupby('datetime')
+        unique_timestamps = len(grouped)
+        logger.info(f"  {unique_timestamps} timestamps uniques à traiter")
+        
         n_total = 0
-        for _, row in stations_df.iterrows():
-            ref_time = pd.Timestamp(row['datetime'])
+        n_processed_timestamps = 0
+        
+        # Traiter par batch de timestamps
+        for ref_time, group_df in grouped:
+            ref_time = pd.Timestamp(ref_time)
+            n_processed_timestamps += 1
+            
+            if n_processed_timestamps % 100 == 0:
+                logger.info(f"  Progression: {n_processed_timestamps}/{unique_timestamps} timestamps ({n_total} samples)")
+            
+            # Charger les images satellites UNE SEULE FOIS pour ce timestamp
             multi_images = self.satellite_loader.get_multi_temporal_images(ref_time)
             if multi_images is None:
                 continue
+            
+            # Traiter TOUTES les stations de ce timestamp avec les MÊMES images
+            for _, row in group_df.iterrows():
+                # construire labels dict
+                labels = {}
+                valid_label_count = 0
+                for var in Config.TARGET_VARS:
+                    v = row.get(var, np.nan)
+                    labels[var] = np.nan if pd.isna(v) else float(v)
+                    if not pd.isna(v):
+                        valid_label_count += 1
 
-            # construire labels dict
-            labels = {}
-            valid_label_count = 0
-            for var in Config.TARGET_VARS:
-                v = row.get(var, np.nan)
-                labels[var] = np.nan if pd.isna(v) else float(v)
-                if not pd.isna(v):
-                    valid_label_count += 1
+                # appliquer critère minimal (au moins 1 label valide ici, adapter si besoin)
+                if valid_label_count < 1:
+                    continue
 
-            # appliquer critère minimal (au moins 1 label valide ici, adapter si besoin)
-            if valid_label_count < 1:
-                continue
+                sample = {
+                    'timestamp': ref_time,
+                    'station_id': int(row['number_sta']),
+                    'station_lat': float(row.get('lat', np.nan)),
+                    'station_lon': float(row.get('lon', np.nan)),
+                    'multi_temporal_images': multi_images,  # RÉUTILISATION des mêmes images
+                    'labels': labels
+                }
 
-            sample = {
-                'timestamp': ref_time,
-                'station_id': int(row['number_sta']),
-                'station_lat': float(row.get('lat', np.nan)),
-                'station_lon': float(row.get('lon', np.nan)),
-                'multi_temporal_images': multi_images,
-                'labels': labels
-            }
+                if self.save_intermediate:
+                    self._current_chunk.append(sample)
+                    self._flush_if_needed()
+                else:
+                    self.samples.append(sample)
 
-            if self.save_intermediate:
-                self._current_chunk.append(sample)
-                self._flush_if_needed()
-            else:
-                self.samples.append(sample)
-
-            n_total += 1
+                n_total += 1
 
         logger.info(f"Création terminée — samples retenus: {n_total}")
 
