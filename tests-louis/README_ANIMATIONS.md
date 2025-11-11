@@ -37,7 +37,7 @@ Toutes les animations sont dans le dossier : `animations/`
 
 ### Animation comparative
 
-5. **`comparison_animation.gif`** (taille variable)
+1. **`comparison_animation.gif`** (taille variable)
    - **Contenu** : Les 4 canaux côte à côte
    - **Layout** : Grille 2×2
    - **Durée** : ~12s à 2 fps
@@ -50,16 +50,19 @@ Toutes les animations sont dans le dossier : `animations/`
 ### IR039 & IR108 (Infrarouges)
 
 **Code couleur** :
+
 - **Violet/Bleu foncé** : Très froid (~-60°C à -40°C) → Nuages très hauts (convection profonde, orages)
 - **Bleu/Cyan** : Froid (~-40°C à -20°C) → Nuages hauts (cirrus, cirrostratus)
 - **Vert/Jaune** : Modéré (~-20°C à 0°C) → Nuages moyens/bas
 - **Orange/Rouge** : Chaud (~0°C à 20°C) → Sol, mer, zones dégagées
 
 **Différence IR039 vs IR108** :
+
 - **IR039** (3.9 µm) : Plus sensible aux petites gouttes, utile de nuit
 - **IR108** (10.8 µm) : Canal standard, meilleure température globale
 
 **Ce qu'on observe** :
+
 - Déplacement des systèmes nuageux
 - Développement/dissipation de convection
 - Fronts chauds/froids
@@ -70,18 +73,21 @@ Toutes les animations sont dans le dossier : `animations/`
 ### VIS06 (Visible)
 
 **Code couleur** :
+
 - **Noir** : Nuit ou ciel dégagé (0% réflectance)
 - **Gris foncé** : Faible réflectance (mer, sol sombre, peu de nuages)
 - **Gris clair** : Nuages fins ou fragmentés
 - **Blanc** : Nuages épais (forte réflectance, 80-100%)
 
 **Ce qu'on observe** :
+
 - **Lever/coucher du soleil** : Gradient progressif d'éclairement
 - **Épaisseur nuageuse** : Plus blanc = plus épais
 - **Limite jour/nuit** : Zone noire vs zone éclairée
 - **Évolution diurne** : Développement de cumulus l'après-midi
 
 **⚠️ Limites** :
+
 - Inutilisable la nuit
 - Dépendant de l'angle solaire
 - Difficile à interpréter au crépuscule
@@ -91,11 +97,13 @@ Toutes les animations sont dans le dossier : `animations/`
 ### WV062 (Vapeur d'eau)
 
 **Code couleur** (généralement noir & blanc inversé) :
+
 - **Blanc/Clair** : Atmosphère humide en altitude (beaucoup de vapeur d'eau)
 - **Gris** : Humidité moyenne
 - **Noir/Foncé** : Atmosphère sèche (air descendant, dorsales anticycloniques)
 
 **Ce qu'on observe** :
+
 - **Masses d'air** : Zones humides vs sèches
 - **Jets streams** : Bandes sombres = air sec descendant
 - **Flux d'humidité** : Transport vers zones pré-convectives
@@ -128,6 +136,7 @@ En regardant les 4 canaux simultanément, on peut :
 ### 3. Détecter les précipitations
 
 **Signature typique** :
+
 - VIS06 : Blanc intense (nuages épais)
 - IR108 : Froid (<-30°C, sommet haut)
 - WV062 : Très humide
@@ -136,11 +145,13 @@ En regardant les 4 canaux simultanément, on peut :
 ### 4. Suivre les fronts
 
 **Front chaud** :
+
 - Progression lente de nébulosité étendue
 - WV062 montre l'advection d'air humide
 - IR108 : Réchauffement progressif
 
 **Front froid** :
+
 - Ligne de convection nette
 - Contraste fort en WV062
 - Développement rapide en VIS06 (si jour)
@@ -150,6 +161,7 @@ En regardant les 4 canaux simultanément, on peut :
 ## 💻 Script utilisé
 
 Le script `animate_satellite.py` :
+
 - Charge chaque fichier NetCDF avec `xarray`
 - Génère une image par pas de temps
 - Assemble les images en GIF avec `imageio`
@@ -157,6 +169,7 @@ Le script `animate_satellite.py` :
 - Nettoyage automatique des fichiers temporaires
 
 **Pour relancer** :
+
 ```bash
 python animate_satellite.py
 ```

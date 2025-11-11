@@ -1,3 +1,4 @@
+
 # Weather Prophet 🌦️
 
 Projet de prédiction météorologique par Machine Learning à partir de données satellites et de stations au sol.
@@ -7,7 +8,8 @@ Projet de prédiction météorologique par Machine Learning à partir de donnée
 Créer un modèle de ML capable de **prédire les conditions météorologiques au sol** (température, humidité, précipitations, etc.) à partir d'**images satellites historiques**.
 
 ### Principe
-```
+
+```text
 Images satellites passées → Modèle ML → Prédiction météo au sol
 (t-12h, t-1j, t-2j, t-7j)              (température, humidité, etc.)
 ```
@@ -16,7 +18,7 @@ Images satellites passées → Modèle ML → Prédiction météo au sol
 
 ## 📁 Structure du projet
 
-```
+```text
 weather-prophet/
 ├── README.md                  # 📖 Ce fichier - documentation principale
 ├── tests-louis/               # 🧪 Scripts de traitement et ML
@@ -52,23 +54,26 @@ python create_ml_dataset.py
 ```
 
 **Configuration** (à modifier dans le script si nécessaire) :
+
 ```python
 zone = 'SE'  # ou 'NW' (South-East ou North-West France)
 year = 2016
 date = '20160101'  # Date du CSV des stations
 ```
 
-**Sortie** : 
+**Sortie** :
+
 - `datasets/meteonet_SE_2016_20160101.h5` (~740 MB)
 - 2902 samples avec images satellites + labels stations
 
 **Ce que fait le script** :
+
 1. ✅ Charge les fichiers satellites NetCDF (CT, IR039, IR108, VIS06, WV062)
 2. ✅ Charge les mesures des stations au sol depuis le CSV
 3. ✅ Pour chaque station et chaque timestamp :
-   - Extrait les **images satellites complètes** à t-12h, t-24h, t-48h, t-168h
-   - Récupère les mesures au sol (t, hu, precip, dd, ff, psl, td)
-   - Aligne temporellement et spatialement les données
+    - Extrait les **images satellites complètes** à t-12h, t-24h, t-48h, t-168h
+    - Récupère les mesures au sol (t, hu, precip, dd, ff, psl, td)
+    - Aligne temporellement et spatialement les données
 4. ✅ Sauvegarde en format HDF5 compressé avec metadata
 
 **Temps d'exécution** : ~10-15 secondes pour 1 jour de données
@@ -87,6 +92,7 @@ python inspect_dataset.py [chemin_dataset.h5]
 Si aucun chemin n'est fourni, il inspecte automatiquement le dernier dataset créé.
 
 **Ce qu'il affiche** :
+
 - 📋 Structure du fichier HDF5 (dimensions, attributs)
 - 📊 Statistiques sur les images et labels (min, max, mean, NaN%)
 - 📍 Info spatiales (stations, coordonnées)
@@ -95,6 +101,7 @@ Si aucun chemin n'est fourni, il inspecte automatiquement le dernier dataset cr�
 - 🎨 Visualisations de samples aléatoires (PNG générés)
 
 **Sortie** :
+
 - Statistiques dans le terminal
 - `datasets/sample_XXX_visualization.png` (3 samples aléatoires)
 
@@ -124,7 +131,7 @@ for images, labels, metadata in train_loader:
     # images: (batch_size, 4_timesteps, 5_channels, height, width)
     # labels: (batch_size, 7_variables)
     # metadata: dict avec timestamp, station_id, coords, etc.
-    
+
     # → Votre modèle ici !
     predictions = model(images)
     loss = criterion(predictions, labels)
@@ -162,19 +169,21 @@ python test_dataloader.py
 ```
 
 **Ce qu'il fait** :
+
 - ✅ Charge le dataset
 - ✅ Crée les DataLoaders
 - ✅ Teste le chargement d'un batch
 - ✅ Affiche les shapes et statistiques
 
 **Sortie attendue** :
-```
+
+```text
 ✅ TOUT FONCTIONNE PARFAITEMENT!
 
 🚀 Vous pouvez maintenant:
-  1. Créer un modèle PyTorch
-  2. Itérer sur train_loader pour l'entraînement
-  3. Évaluer sur val_loader et test_loader
+    1. Créer un modèle PyTorch
+    2. Itérer sur train_loader pour l'entraînement
+    3. Évaluer sur val_loader et test_loader
 ```
 
 ---
@@ -183,7 +192,7 @@ python test_dataloader.py
 
 ### Structure HDF5
 
-```
+```text
 dataset.h5
 ├── images/                    (N, 4, 5, 171, 261)
 │   └── Images satellites :
@@ -207,6 +216,7 @@ dataset.h5
 ### Variables
 
 **Canaux satellites** :
+
 - `CT` : Type de nuage (0-15, catégoriel)
 - `IR039` : Infrarouge 3.9 µm (°C)
 - `IR108` : Infrarouge 10.8 µm (°C)
@@ -214,9 +224,10 @@ dataset.h5
 - `WV062` : Vapeur d'eau 6.2 µm (°C)
 
 **Labels stations** :
+
 - `dd` : Direction du vent (°)
-- `ff` : Vitesse du vent (m/s)
-- `precip` : Précipitations (kg/m²)
+- `ff` : Vitesse du vent (m.s^-1^)
+- `precip` : Précipitations (kg.m^2^)
 - `hu` : Humidité (%)
 - `td` : Température du point de rosée (K)
 - `t` : Température (K)
@@ -229,6 +240,7 @@ dataset.h5
 ### Modifier les timesteps
 
 Dans `tests-louis/create_ml_dataset.py` :
+
 ```python
 class Config:
     TIMESTEPS = [-6, -12, -24, -72]  # 6h, 12h, 1j, 3j au lieu de [-12, -24, -48, -168]
@@ -263,6 +275,7 @@ dataset = MeteoNetDataset(
 ## 📈 Statistiques du dataset (exemple SE_20160101)
 
 ### Données générales
+
 - **Samples** : 2902
 - **Stations uniques** : 335
 - **Dimensions images** : 171 × 261 pixels
@@ -364,22 +377,27 @@ train_loader = DataLoader(dataset, batch_size=16)  # Au lieu de 32
 ## 🐛 Troubleshooting
 
 ### Erreur "No module named 'h5py'"
+
 ```bash
 pip install h5py
 ```
 
 ### Erreur "Indexing elements must be in increasing order"
+
 HDF5 nécessite des indices triés :
+
 ```python
 indices = np.sort(indices)
 ```
 
 ### Performances lentes
+
 - Augmenter `num_workers` dans DataLoader
 - Vérifier que le HDF5 est sur un SSD
 - Réduire `batch_size` si RAM insuffisante
 
 ### Dataset trop gros
+
 - Réduire la période (1 semaine au lieu de 1 mois)
 - Sous-échantillonner temporellement (1 sample toutes les 3h)
 - Utiliser moins de canaux satellites
@@ -400,4 +418,4 @@ Voir `LICENCE.md` pour les détails.
 
 ---
 
-**Bon entraînement ! 🌦️🚀**
+Bon entraînement ! 🌦️🚀
