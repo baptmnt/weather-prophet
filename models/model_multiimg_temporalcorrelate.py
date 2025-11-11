@@ -1,72 +1,92 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 class MultiTypeTemporalCorrelationCNN(nn.Module):
-    def __init__(self, n_types=3, n_deltas=3, output_dim=2, hidden_dim=128, cnn_channels=32):
+    def __init__(
+        self,
+        n_types: int = 3,
+        n_deltas: int = 3,
+        output_dim: int = 2,
+        hidden_dim: int = 128,
+        cnn_channels: int = 32,
+        proj_dim: int | None = None  # Réduction optionnelle de l'input du LSTM
+    ):
         super().__init__()
         self.n_types = n_types
         self.n_deltas = n_deltas
         self.cnn_channels = cnn_channels
+        self.output_dim = output_dim
 
-        # --- CNN partagé pour extraire les features d'une image ---
+        # CNN partagé (1 canal)
         self.cnn = nn.Sequential(
-            nn.Conv2d(1, cnn_channels, 3, 1, 1),
+            nn.Conv2d(1, cnn_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(cnn_channels),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2,2),
+            nn.MaxPool2d(2, 2),
 
-            nn.Conv2d(cnn_channels, 2*cnn_channels, 3, 1, 1),
-            nn.BatchNorm2d(2*cnn_channels),
+            nn.Conv2d(cnn_channels, 2 * cnn_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(2 * cnn_channels),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2,2)
+            nn.MaxPool2d(2, 2),
         )
-        self.global_pool = nn.AdaptiveAvgPool2d((1,1))  # batch x channels x 1 x 1
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))  # -> (B, 2*cnn_channels, 1, 1)
 
-        # --- LSTM sur les vecteurs temporels ---
+        # Dimensions de features
+        self.per_type_feat_dim = 2 * cnn_channels
+        self.concat_feat_dim = n_types * self.per_type_feat_dim  # concat des types à chaque timestep
+
+        # Projection optionnelle avant LSTM (si proj_dim est fourni)
+        if proj_dim is not None:
+            self.proj = nn.Linear(self.concat_feat_dim, proj_dim)
+            self.lstm_input_size = proj_dim
+        else:
+            self.proj = nn.Identity()
+            self.lstm_input_size = self.concat_feat_dim
+
+        # LSTM sur la séquence temporelle
         self.lstm = nn.LSTM(
-            input_size=2*cnn_channels,
+            input_size=self.lstm_input_size,
             hidden_size=hidden_dim,
             num_layers=1,
             batch_first=True
         )
 
-        # --- Fully connected ---
+        # Tête de régression
         self.regressor = nn.Sequential(
             nn.Linear(hidden_dim, 64),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
-            nn.Linear(64, output_dim)
+            nn.Linear(64, output_dim),
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x = torch.randn(batch_size, n_types, n_deltas, H, W)
-        Chaque type est séparé, et dates dans l'ordre : [h-1, j-1, j-7]
+        x: (batch, n_types, n_deltas, H, W)
         """
-        batch_size = x.size(0)
-        all_seq = []
+        B, _, _, H, W = x.shape
+        steps = []
 
         for t in range(self.n_deltas):
-            # On concatène les types pour une date t : batch x n_types x H x W
-            imgs = x[:, :, t, :, :]  # batch x n_types x H x W
-            # On peut traiter chaque type séparément, puis concat features
-            feats = []
-            for ty in range(self.n_types):
-                img = imgs[:, ty, :, :].unsqueeze(1)  # batch x 1 x H x W
-                f = self.cnn(img)                     # batch x channels x H' x W'
-                f = self.global_pool(f)
-                f = f.view(batch_size, -1)            # batch x channels
-                feats.append(f)
-            # concat features des types pour cette date
-            feats_t = torch.cat(feats, dim=1)         # batch x (channels * n_types)
-            all_seq.append(feats_t.unsqueeze(1))      # batch x 1 x (channels*n_types)
+            # (B, n_types, H, W) -> (B*n_types, 1, H, W)
+            imgs_t = x[:, :, t, :, :]
+            imgs_bt = imgs_t.reshape(B * self.n_types, 1, H, W)
 
-        # sequence temporelle : batch x n_deltas x (channels*n_types)
-        seq = torch.cat(all_seq, dim=1)
+            # Encode CNN puis pool global -> (B*n_types, per_type_feat_dim)
+            f = self.cnn(imgs_bt)
+            f = self.global_pool(f).flatten(1)
 
-        # passage LSTM
-        lstm_out, (h_n, c_n) = self.lstm(seq)        # lstm_out: batch x n_deltas x hidden_dim
-        last_h = lstm_out[:, -1, :]                  # on prend la dernière sortie temporelle
+            # Regrouper par batch et concaténer sur les types -> (B, concat_feat_dim)
+            f = f.view(B, self.n_types, self.per_type_feat_dim)
+            f = f.reshape(B, self.concat_feat_dim)
 
-        return self.regressor(last_h)                 # batch x 2
+            # Projection optionnelle -> (B, lstm_input_size)
+            f = self.proj(f)
+
+            # Empiler comme pas de temps -> (B, 1, lstm_input_size)
+            steps.append(f.unsqueeze(1))
+
+        # Séquence pour LSTM -> (B, n_deltas, lstm_input_size)
+        seq = torch.cat(steps, dim=1)
+
+        lstm_out, _ = self.lstm(seq)          # (B, n_deltas, hidden_dim)
+        last = lstm_out[:, -1, :]             # (B, hidden_dim)
+        return self.regressor(last)           # (B, output_dim)

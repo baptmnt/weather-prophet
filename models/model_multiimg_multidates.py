@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class MultiChannelCNN(nn.Module):
-    def __init__(self, n_types=3, n_deltas=3, output_dim=2):
+    def __init__(self, n_types=5, n_deltas=4, output_dim=7):
         super().__init__()
         self.input_channels = n_types * n_deltas
 
@@ -26,7 +26,7 @@ class MultiChannelCNN(nn.Module):
             nn.Conv2d(128, 256, 3, stride=1, padding=1),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2,2)
+            nn.AdaptiveAvgPool2d((1, 1))
         )
 
         self.global_pool = nn.AdaptiveAvgPool2d((1,1))
@@ -35,7 +35,7 @@ class MultiChannelCNN(nn.Module):
         self.regressor = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            #nn.Dropout(0.3),
             nn.Linear(128, output_dim)
         )
 
