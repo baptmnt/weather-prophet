@@ -7,10 +7,16 @@ Projet de prédiction météorologique par Machine Learning à partir de donnée
 
 Générer directement le dataset pour la station de Bron (ID 69029001) sur SE 2016.
 
-- Windows PowerShell:
+- Windows PowerShell (dataset complet) :
 
 ```powershell
 python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 --data-root ".\meteonet\data_samples" --num-workers 1 --station-id 69029001 --use-dask
+```
+
+- Windows PowerShell (dataset réduit ×2, recommandé pour tests rapides) :
+
+```powershell
+python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 --data-root ".\meteonet\data_samples" --num-workers 1 --station-id 69029001 --downsample-factor 2
 ```
 
 - Linux/macOS:
@@ -19,7 +25,7 @@ python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 
 python weather-prophet/tests-louis/create_ml_dataset.py --zone SE --year 2016 --data-root ./meteonet/data_samples --num-workers 1 --station-id 69029001 --use-dask
 ```
 
-Plus de détails et options (préchargement, compression, parallélisation) sont documentés ci-dessous.
+Plus de détails et options (préchargement, compression, parallélisation, **downsampling**) sont documentés ci-dessous.
 
 ## 🎯 Objectif du projet
 
@@ -163,6 +169,39 @@ python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 
 python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 --data-root ".\meteonet\data_samples" --num-workers 1 --use-dask --preload-images --compression-level 1
 ```
 
+#### 🖼️ Downsampling spatial (réduction de résolution)
+
+Réduisez la taille des images satellites pour accélérer l'entraînement et diminuer l'empreinte disque/RAM.
+
+- `--downsample-factor N` : Divise les dimensions par N (choix: 1, 2, 5, 10)
+  - **Factor 1** (défaut): 171×261 pixels (~1.7 MB pour 10 samples Bron)
+  - **Factor 2** (recommandé): 85×130 pixels (~0.9 MB, -47%) — Sweet spot performance/qualité
+  - **Factor 5** (agressif): 34×52 pixels (~0.2 MB, -88%) — Pour prototypage rapide
+  - **Factor 10** (extrême): 17×26 pixels (~0.05 MB, -97%) — Perte de détails significative
+
+Méthode: **Average pooling** (préserve les valeurs moyennes, pas d'artefacts)
+
+Impact estimé sur dataset complet (4767 samples):
+
+| Factor | Dimensions | Taille estimée | Gain mémoire | Usage recommandé |
+|--------|-----------|----------------|--------------|------------------|
+| 1 | 171×261 | 92.1 MB | - | Production, précision maximale |
+| 2 | 85×130 | **~23 MB** | 4× | **Développement, sweet spot** |
+| 5 | 34×52 | **~3.7 MB** | 25× | Prototypage, tests rapides |
+| 10 | 17×26 | **~0.9 MB** | 100× | Proof-of-concept uniquement |
+
+Exemples:
+
+```powershell
+# Dataset réduit ×2 (recommandé pour débuter)
+python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 --data-root ".\meteonet\data_samples" --num-workers 1 --station-id 69029001 --downsample-factor 2
+
+# Dataset ultra-compact ×5 (prototypage)
+python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 --data-root ".\meteonet\data_samples" --num-workers 1 --station-id 69029001 --downsample-factor 5
+```
+
+💡 **Conseil**: Commencez avec `--downsample-factor 2` pour itérer rapidement, puis passez à factor 1 pour l'entraînement final.
+
 Résumé rapide des gains récents:
 
 - 14 min → ~2 min 40 s pour 4767 samples (gzip activé)
@@ -197,10 +236,11 @@ python create_ml_dataset.py \
 - `--build-final` : Merger des chunks existants sans reconstruire
 - `--merge-start` / `--merge-end` : Sélectionner la plage de chunks à merger
 - `--intermediate-dir` : Dossier pour fichiers temporaires
-- `--use-dask` : Active la lecture NetCDF avec Dask (lazy + chunks sur l’axe temps)
-- `--dask-chunk-time` : Taille de chunk Dask sur l’axe temps (ex: 256)
+- `--use-dask` : Active la lecture NetCDF avec Dask (lazy + chunks sur l'axe temps)
+- `--dask-chunk-time` : Taille de chunk Dask sur l'axe temps (ex: 256)
 - `--preload-images` : Précharger en mémoire toutes les images nécessaires (réduit les I/O)
-- `--compression-level` : Niveau gzip (0-9) pour l’écriture HDF5
+- `--compression-level` : Niveau gzip (0-9) pour l'écriture HDF5
+- `--downsample-factor` : Facteur de downsampling spatial (1, 2, 5 ou 10; défaut: 1 = pas de downsampling). Réduit les dimensions des images par moyenne pooling.
 
 💡 **Astuce** : Pour traiter de gros datasets (plusieurs jours/mois), utilisez **toujours** `--save-intermediate` pour éviter de saturer la RAM et accélérer l'écriture finale.
 

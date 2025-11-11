@@ -65,6 +65,9 @@ class Config:
     DASK_TIME_CHUNK = 256      # Taille de chunk sur l'axe temps (ex: 256)
     PRELOAD_IMAGES = False     # Précharger en mémoire toutes les images nécessaires (réduit I/O)
 
+    # Downsampling spatial
+    DOWNSAMPLE_FACTOR = 1      # Facteur de réduction spatiale (1=original, 2=moitié, 5=1/5, 10=1/10)
+
     # Zones disponibles
     ZONES = ['NW', 'SE']
 
@@ -198,6 +201,15 @@ class SatelliteDataLoader:
             # Gérer les valeurs manquantes
             if np.isnan(image).all():
                 return None
+            
+            # Appliquer le downsampling spatial si demandé
+            if Config.DOWNSAMPLE_FACTOR > 1:
+                # Average pooling pour préserver les valeurs moyennes (pas besoin de skimage)
+                factor = Config.DOWNSAMPLE_FACTOR
+                h, w = image.shape
+                new_h, new_w = h // factor, w // factor
+                # Reshape et moyenne sur les blocs
+                image = image[:new_h*factor, :new_w*factor].reshape(new_h, factor, new_w, factor).mean(axis=(1, 3))
             
             # Cache l'image
             self.image_cache[cache_key] = image
@@ -800,11 +812,17 @@ class MLDatasetBuilder:
                 ds_shape = sat_datasets[ch][ch].shape
                 if len(ds_shape) == 3:
                     _, img_h, img_w = ds_shape
+                    # Appliquer le downsampling aux dimensions
+                    if Config.DOWNSAMPLE_FACTOR > 1:
+                        img_h = img_h // Config.DOWNSAMPLE_FACTOR
+                        img_w = img_w // Config.DOWNSAMPLE_FACTOR
                     break
         
         if img_h is None or img_w is None:
             logger.error("Impossible de déterminer les dimensions des images")
             return
+        
+        logger.info(f"  Dimensions images finales: {img_h}×{img_w} pixels")
         
         n_timesteps = len(Config.TIMESTEPS)
         n_channels = len(Config.CHANNELS)
@@ -942,6 +960,8 @@ def main():
                         help="Précharger en mémoire toutes les images nécessaires (réduit fortement les I/O).")
     parser.add_argument('--compression-level', type=int, required=False,
                         help="Niveau de compression gzip (0-9). 0 = pas de compression (fichier énorme), 1 = rapide, 9 = maximum.")
+    parser.add_argument('--downsample-factor', type=int, required=False, choices=[1, 2, 5, 10], default=1,
+                        help="Facteur de réduction spatiale des images (1=original 171×261, 2=moitié 86×131, 5=1/5 34×52, 10=1/10 17×26). Réduit la taille du fichier et accélère l'entraînement.")
     args = parser.parse_args()
 
     # Résoudre dataset_root (par défaut ./data si non fourni)
@@ -953,6 +973,9 @@ def main():
 
     # Nom de fichier de sortie (sans date)
     suffix = f"_sta{args.station_id}" if args.station_id else ""
+    # Ajouter suffixe downsampling si actif
+    if args.downsample_factor > 1:
+        suffix += f"_ds{args.downsample_factor}"
     output_filename = f"meteonet_{zone}_{args.year}{suffix}.h5"
     output_path = out_dir / output_filename
 
@@ -1013,6 +1036,11 @@ def main():
     if args.compression_level is not None:
         lvl = max(0, min(9, int(args.compression_level)))
         Config.COMPRESSION_LEVEL = lvl
+    
+    # Appliquer downsampling spatial
+    Config.DOWNSAMPLE_FACTOR = args.downsample_factor
+    if Config.DOWNSAMPLE_FACTOR > 1:
+        logger.info(f"Downsampling spatial activé: facteur {Config.DOWNSAMPLE_FACTOR} (réduction {Config.DOWNSAMPLE_FACTOR**2}× en taille)")
 
     # Construire le dataset en injectant les dossiers d'input spécifiques
     builder = MLDatasetBuilder(output_path, satellite_dir=sat_dir, ground_dir=ground_dir,
