@@ -9,7 +9,7 @@ from training.save import save_model_checkpoint
 if __name__ == "__main__":
     # Configuration des paramètres
     dataset_path = "dataset/meteonet_SE_2016_sta69029001.h5"
-    sample_size = 2500
+    sample_size = 100
 
     # Chargement des données h5
     with h5py.File(dataset_path, 'r') as f:
@@ -46,7 +46,7 @@ if __name__ == "__main__":
 
         # Fusionner les dimensions (n_deltas, n_types) → n_deltas * n_types
         X = X.permute(0, 2, 1, 3, 4)  # (batch, n_types, n_deltas, H, W)
-        X = X.reshape(X.size(0), X.size(1) * X.size(2), X.size(3), X.size(4))  # (batch, 5*4=20, H, W)
+        #X = X.reshape(X.size(0), X.size(1) * X.size(2), X.size(3), X.size(4))  # (batch, 5*4=20, H, W)
         
         # === NORMALISATION DES IMAGES ===
         # Calculer mean/std par canal (sur données valides)
@@ -67,7 +67,7 @@ if __name__ == "__main__":
 
     dataset = TensorDataset(X, y)
 
-    model = MultiChannelCNN(
+    model = MultiTypeTemporalCorrelationCNN(
         n_types=5,      
         n_deltas=4,     
         output_dim=7    
@@ -81,12 +81,12 @@ if __name__ == "__main__":
 
     ]
     for p in params:
-        trained_model, optimizer, metrics = train_model("MultiChannelCNN-w/o-dropout", model, dataset, num_epochs=p[0], batch_size=p[1], learning_rate=p[2], return_predictions=True)
+        trained_model, optimizer, metrics = train_model("MultiChannelTemporalCorrelationCNN-w/o-dropout", model, dataset, num_epochs=p[0], batch_size=p[1], learning_rate=p[2], return_predictions=True)
         
         save_model_checkpoint(
             model=trained_model,
             optimizer=optimizer,
-            model_name="MultiChannelCNN",
+            model_name="MultiChannelTemporalCorrelationCNN",
             epoch=metrics['epoch'],
             train_loss=metrics['train_loss'],
             val_loss=metrics['val_loss'],
