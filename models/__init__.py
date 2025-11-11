@@ -1,0 +1,4 @@
+from .model_multiimg_multidates import MultiChannelCNN
+from .simple_1img import SimpleCNN
+from .model_multiimg_temporalcorrelate import MultiTypeTemporalCorrelationCNN
+from .model_soloimg import CNNModel
