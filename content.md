@@ -1,4 +1,6 @@
 
+# Weather Prophet : Ground Stations
+
 ## Ground stations
 
 ### Metadata parameters
@@ -17,9 +19,9 @@ The date parameter is a datetime object with the format 'YYYY-MM-DD HH:mm:ss'.
 
 * **dd** : wind direction in degrees
 
-* **ff** : wind speed in m.s<sup>-1</sup>
+* **ff** : wind speed in m.s^-1^
 
-* **precip** : precipitation during the reporting period in kg.m<sup>2</sup>
+* **precip** : precipitation during the reporting period in kg.m^2^
 
 * **hu** : humidity in %
 
