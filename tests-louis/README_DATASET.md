@@ -5,13 +5,14 @@
 Ce projet génère un dataset ML au format HDF5 pour la prédiction météorologique à partir de données satellites et de stations au sol.
 
 ### Objectif
+
 Entraîner un modèle de ML qui, à partir d'images satellites historiques (t-12h, t-1j, t-2j, t-7j), prédit les mesures météo au sol au temps t (température, humidité, précipitations, etc.).
 
 ---
 
 ## 🗂️ Structure du dataset HDF5
 
-```
+```text
 dataset.h5
 ├── images/                    (N, 4, 5, 171, 261)
 │   └── Images satellites complètes
@@ -39,6 +40,7 @@ dataset.h5
 ```
 
 ### Attributs du fichier
+
 - `n_samples`: Nombre total de samples
 - `n_timesteps`: Nombre de pas de temps passés (4)
 - `n_channels`: Nombre de canaux satellites (5)
@@ -60,6 +62,7 @@ python create_ml_dataset.py
 ```
 
 **Configuration** (dans le script) :
+
 ```python
 zone = 'SE'  # ou 'NW'
 year = 2016
@@ -75,6 +78,7 @@ python inspect_dataset.py [chemin_vers_dataset.h5]
 ```
 
 Affiche :
+
 - ✅ Structure et dimensions
 - ✅ Statistiques sur les images et labels
 - ✅ Qualité des données (taux de NaN, complétude)
@@ -113,6 +117,7 @@ for images, labels, metadata in train_loader:
 ## 📊 Statistiques du dataset (sample SE_20160101)
 
 ### Données générales
+
 - **Samples totaux** : 2902
 - **Stations uniques** : 335
 - **Zone couverte** : Sud-Est France
@@ -120,12 +125,14 @@ for images, labels, metadata in train_loader:
 - **Longitude** : 2.00° - 9.54°
 
 ### Images satellites
+
 - **Dimensions** : 171 × 261 pixels (~3 km/pixel)
 - **Canaux disponibles** : IR039, IR108, VIS06, WV062 (CT absent pour SE)
 - **Résolution temporelle** : 1 heure
 - **NaN ratio** : ~50% (normal, VIS06 n'a pas de données de nuit)
 
 ### Labels stations
+
 | Variable | Min     | Max      | Mean    | NaN% |
 |----------|---------|----------|---------|------|
 | dd       | 0°      | 360°     | 138°    | 6.5% |
@@ -153,6 +160,7 @@ for images, labels, metadata in train_loader:
 ✅ **Efficacité** : Une image peut servir pour toutes les stations de la zone (pas de duplication)
 
 ### Timesteps choisis
+
 - **t-12h** : Météo récente (tendance à court terme)
 - **t-24h** : Évolution sur 1 jour
 - **t-48h** : Dynamique à 2 jours
@@ -165,6 +173,7 @@ for images, labels, metadata in train_loader:
 ### Modifier les timesteps
 
 Dans `create_ml_dataset.py` :
+
 ```python
 class Config:
     TIMESTEPS = [-6, -12, -24, -72]  # Exemple : 6h, 12h, 1j, 3j
@@ -187,6 +196,7 @@ class Config:
 ### Ajuster la normalisation
 
 Dans `pytorch_dataloader.py` :
+
 ```python
 dataset = MeteoNetDataset(
     h5_path,
@@ -199,7 +209,7 @@ dataset = MeteoNetDataset(
 
 ## 📝 Format des données
 
-### Images satellites
+### Images satellites du dataset
 
 | Canal  | Type    | Unité | Description                    | Fréquence |
 |--------|---------|-------|--------------------------------|-----------|
@@ -209,7 +219,7 @@ dataset = MeteoNetDataset(
 | VIS06  | float32 | %     | Visible 0.6 µm (jour seul)     | 1 heure   |
 | WV062  | float32 | °C    | Vapeur d'eau 6.2 µm            | 1 heure   |
 
-### Labels stations
+### Labels des stations au sol
 
 Toutes les variables suivent le format du CSV MeteoNet (voir `content.md`).
 
@@ -225,6 +235,7 @@ Toutes les variables suivent le format du CSV MeteoNet (voir `content.md`).
 4. **Timesteps** : Si données satellites manquantes à un timestep
 
 **Gestion recommandée** :
+
 - Images : Remplacer NaN par 0 ou moyenne du canal
 - Labels : Filtrer les samples avec trop de NaN, ou utiliser des loss functions robustes
 
@@ -304,27 +315,32 @@ with h5py.File('dataset.h5', 'r') as f:
 ## 🐛 Troubleshooting
 
 ### Erreur "No module named 'h5py'"
+
 ```bash
 pip install h5py
 ```
 
 ### Erreur "Indexing elements must be in increasing order"
+
 HDF5 nécessite des indices triés :
+
 ```python
 indices = np.sort(indices)
 data = dataset[indices]
 ```
 
 ### Performances lentes
+
 - Augmenter `num_workers` dans le DataLoader
 - Vérifier que le fichier HDF5 est sur un SSD
 - Réduire `batch_size` si RAM insuffisante
 
 ### NaN dans les prédictions
+
 - Vérifier `handle_nans='zero'` dans le dataset
 - Utiliser une loss function robuste aux NaN
 - Filtrer les samples avec trop de valeurs manquantes
 
 ---
 
-**Bon entraînement ! 🚀**
+Bon entraînement ! 🚀
