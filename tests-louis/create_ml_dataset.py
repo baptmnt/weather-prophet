@@ -20,6 +20,7 @@ import logging
 import argparse
 import os
 import glob
+import bisect
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -83,15 +84,19 @@ class Config:
 
 
 class SatelliteDataLoader:
-    """Charge et gère les données satellites NetCDF"""
+    """Charge et gère les données satellites NetCDF avec pré-indexation temporelle"""
     
     def __init__(self, satellite_dir: Path):
         self.satellite_dir = satellite_dir
         self.datasets: Dict[str, xr.Dataset] = {}
         self.image_cache: Dict[str, np.ndarray] = {}
+        # Pré-indexation: channel -> {timestamp: index}
+        self.time_indices: Dict[str, Dict[pd.Timestamp, int]] = {}
+        # Liste triée des timestamps pour recherche rapide (bisect)
+        self.sorted_times: Dict[str, List[pd.Timestamp]] = {}
         
     def load_satellite_files(self, zone: str, year: int) -> Dict[str, xr.Dataset]:
-        """Charge tous les fichiers satellites d'une zone/année"""
+        """Charge tous les fichiers satellites d'une zone/année et construit l'index temporel"""
         logger.info(f"Chargement des fichiers satellites pour {zone}_{year}")
         
         datasets = {}
@@ -103,7 +108,19 @@ class SatelliteDataLoader:
                 try:
                     ds = xr.open_dataset(filepath, engine='h5netcdf')
                     datasets[channel] = ds
-                    logger.info(f"  ✓ {channel}: {len(ds.time)} timesteps, shape {ds[channel].shape}")
+                    
+                    # Pré-indexation: créer un dictionnaire timestamp -> index
+                    time_index = {}
+                    timestamps = []
+                    for idx, time_val in enumerate(ds.time.values):
+                        timestamp = pd.Timestamp(time_val)
+                        time_index[timestamp] = idx
+                        timestamps.append(timestamp)
+                    
+                    self.time_indices[channel] = time_index
+                    self.sorted_times[channel] = sorted(timestamps)
+                    
+                    logger.info(f"  ✓ {channel}: {len(ds.time)} timesteps indexés, shape {ds[channel].shape}")
                 except Exception as e:
                     logger.warning(f"  ✗ {channel}: Erreur de chargement - {e}")
             else:
@@ -113,11 +130,9 @@ class SatelliteDataLoader:
         return datasets
     
     def get_image_at_time(self, channel: str, target_time: pd.Timestamp) -> Optional[np.ndarray]:
-        """Récupère l'image d'un canal à un timestamp donné"""
+        """Récupère l'image d'un canal à un timestamp donné (avec recherche dichotomique O(log n))"""
         if channel not in self.datasets:
             return None
-        
-        ds = self.datasets[channel]
         
         # Créer une clé de cache
         cache_key = f"{channel}_{target_time}"
@@ -125,18 +140,39 @@ class SatelliteDataLoader:
             return self.image_cache[cache_key]
         
         try:
-            # Trouver le timestamp le plus proche
-            time_diffs = np.abs(ds.time.values - target_time.to_datetime64())
-            closest_idx = np.argmin(time_diffs)
-            closest_time = pd.Timestamp(ds.time.values[closest_idx])
+            sorted_times = self.sorted_times.get(channel, [])
+            time_index = self.time_indices.get(channel, {})
+            
+            if not sorted_times:
+                # Fallback: pas d'index disponible
+                logger.debug(f"Pas d'index temporel pour {channel}")
+                return None
+            
+            # Recherche dichotomique du timestamp le plus proche (O(log n))
+            pos = bisect.bisect_left(sorted_times, target_time)
+            
+            # Trouver le timestamp le plus proche parmi les voisins
+            candidates = []
+            if pos > 0:
+                candidates.append((sorted_times[pos - 1], abs((target_time - sorted_times[pos - 1]).total_seconds())))
+            if pos < len(sorted_times):
+                candidates.append((sorted_times[pos], abs((target_time - sorted_times[pos]).total_seconds())))
+            
+            if not candidates:
+                return None
+            
+            # Sélectionner le plus proche
+            closest_time, time_diff_seconds = min(candidates, key=lambda x: x[1])
+            time_diff_minutes = time_diff_seconds / 60
             
             # Vérifier si la différence est acceptable (< 1h)
-            time_diff_minutes = abs((target_time - closest_time).total_seconds() / 60)
             if time_diff_minutes > 60:
                 logger.debug(f"Pas de données {channel} proche de {target_time} (écart: {time_diff_minutes:.0f} min)")
                 return None
             
-            # Extraire l'image
+            # Récupérer l'index et extraire l'image
+            closest_idx = time_index[closest_time]
+            ds = self.datasets[channel]
             image = ds[channel].isel(time=closest_idx).values
             
             # Gérer les valeurs manquantes
@@ -187,18 +223,24 @@ class SatelliteDataLoader:
             ds.close()
         self.datasets.clear()
         self.image_cache.clear()
+        self.time_indices.clear()
+        self.sorted_times.clear()
 
 
 class GroundStationDataLoader:
-    """Charge et gère les données des stations au sol"""
+    """Charge et gère les données des stations au sol avec pré-indexation"""
     
     def __init__(self, ground_stations_dir: Path):
         self.ground_stations_dir = ground_stations_dir
         self.data: Optional[pd.DataFrame] = None
+        # Pré-indexation: (station_id, timestamp) -> row_index
+        self.station_time_index: Dict[Tuple[int, pd.Timestamp], int] = {}
+        # Index par station pour recherche rapide
+        self.station_times: Dict[int, List[pd.Timestamp]] = {}
     
     def load_csv(self, zone: str, year: str) -> pd.DataFrame:
         """
-        Charge le CSV des stations pour une zone et une année.
+        Charge le CSV des stations pour une zone et une année avec indexation.
 
         Args:
             zone: 'NW' ou 'SE'
@@ -221,31 +263,62 @@ class GroundStationDataLoader:
         # Trier par station et temps
         df = df.sort_values(['number_sta', 'datetime'])
         
-        logger.info(f"  {len(df)} mesures, {df['number_sta'].nunique()} stations uniques")
+        # Construire l'index (station_id, timestamp) -> row_index
+        logger.info(f"Construction de l'index temporel des stations...")
+        for idx, row in df.iterrows():
+            station_id = int(row['number_sta'])
+            timestamp = pd.Timestamp(row['datetime'])
+            self.station_time_index[(station_id, timestamp)] = idx
+            
+            # Ajouter à la liste des timestamps par station
+            if station_id not in self.station_times:
+                self.station_times[station_id] = []
+            self.station_times[station_id].append(timestamp)
+        
+        # Trier les timestamps par station pour recherche dichotomique
+        for station_id in self.station_times:
+            self.station_times[station_id] = sorted(self.station_times[station_id])
+        
+        logger.info(f"  {len(df)} mesures, {df['number_sta'].nunique()} stations indexées")
         
         self.data = df
         return df
     
     def get_measurement_at_time(self, station_id: int, target_time: pd.Timestamp) -> Optional[Dict]:
-        """Récupère les mesures d'une station à un timestamp donné"""
+        """Récupère les mesures d'une station à un timestamp donné (avec recherche dichotomique)"""
         if self.data is None:
             return None
         
-        # Filtrer par station
-        station_data = self.data[self.data['number_sta'] == station_id]
-        if station_data.empty:
+        # Vérifier si la station existe
+        if station_id not in self.station_times:
             return None
         
-        # Trouver le timestamp le plus proche
-        time_diffs = np.abs(station_data['datetime'] - target_time)
-        closest_idx = time_diffs.idxmin()
+        sorted_times = self.station_times[station_id]
+        
+        # Recherche dichotomique du timestamp le plus proche (O(log n))
+        pos = bisect.bisect_left(sorted_times, target_time)
+        
+        # Trouver le timestamp le plus proche parmi les voisins
+        candidates = []
+        if pos > 0:
+            candidates.append((sorted_times[pos - 1], abs((target_time - sorted_times[pos - 1]).total_seconds())))
+        if pos < len(sorted_times):
+            candidates.append((sorted_times[pos], abs((target_time - sorted_times[pos]).total_seconds())))
+        
+        if not candidates:
+            return None
+        
+        # Sélectionner le plus proche
+        closest_time, time_diff_seconds = min(candidates, key=lambda x: x[1])
+        time_diff_minutes = time_diff_seconds / 60
         
         # Vérifier si l'écart est acceptable (< 30 min pour les stations)
-        time_diff_minutes = time_diffs[closest_idx].total_seconds() / 60
         if time_diff_minutes > 30:
             return None
         
-        row = station_data.loc[closest_idx]
+        # Récupérer la ligne via l'index
+        row_idx = self.station_time_index[(station_id, closest_time)]
+        row = self.data.loc[row_idx]
         
         # Extraire les variables cibles
         measurement = {
