@@ -8,6 +8,11 @@ __pycache__/
 
 temp_data/
 
+runs/
+
+*.npz
+*.h5
+
 # HDF5 datasets (too large for git)
 *.h5
 datasets/*.h5
