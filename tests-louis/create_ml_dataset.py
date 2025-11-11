@@ -23,6 +23,12 @@ import glob
 import bisect
 from multiprocessing import Pool, cpu_count, freeze_support
 from functools import partial
+try:
+    import dask  # facultatif
+    HAS_DASK = True
+except Exception:
+    HAS_DASK = False
+    # Pas bloquant: on restera en mode xarray classique (pas de message ici pour éviter le bruit lorsqu'on n'utilise pas Dask)
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -53,6 +59,11 @@ class Config:
     OUTPUT_FORMAT = 'hdf5'
     COMPRESSION = 'gzip'  # Nécessaire pour fichier raisonnable (16 GB → 92 MB pour 4767 samples)
     COMPRESSION_LEVEL = 4
+
+    # Lecture optimisée NetCDF
+    USE_DASK = False           # Activer xarray+dask (lazy loading) pour les NetCDF
+    DASK_TIME_CHUNK = 256      # Taille de chunk sur l'axe temps (ex: 256)
+    PRELOAD_IMAGES = False     # Précharger en mémoire toutes les images nécessaires (réduit I/O)
 
     # Zones disponibles
     ZONES = ['NW', 'SE']
@@ -108,7 +119,14 @@ class SatelliteDataLoader:
             
             if filepath.exists():
                 try:
-                    ds = xr.open_dataset(filepath, engine='h5netcdf')
+                    open_kwargs = {"engine": "h5netcdf"}
+                    # Activer dask si demandé et disponible
+                    if Config.USE_DASK and HAS_DASK:
+                        open_kwargs["chunks"] = {"time": Config.DASK_TIME_CHUNK}
+                        logger.info(f"  → {channel}: ouverture avec Dask chunks time={Config.DASK_TIME_CHUNK}")
+                    elif Config.USE_DASK and not HAS_DASK:
+                        logger.warning("Dask non installé: ouverture sans chunks (désactiver --use-dask ou installer dask)")
+                    ds = xr.open_dataset(filepath, **open_kwargs)
                     datasets[channel] = ds
                     
                     # Pré-indexation: créer un dictionnaire timestamp -> index
@@ -239,7 +257,9 @@ class SatelliteDataLoader:
         # Charger toutes les images en un seul appel (vectorisé)
         if indices_to_load:
             try:
-                images = ds[channel].isel(time=indices_to_load).values
+                # Avec Dask activé, on force le chargement en mémoire pour ces indices
+                var = ds[channel].isel(time=indices_to_load)
+                images = var.load().values if (Config.USE_DASK and HAS_DASK) else var.values
                 
                 # Mettre en cache
                 for i, idx in enumerate(indices_to_load):
@@ -759,6 +779,19 @@ class MLDatasetBuilder:
         grouped = stations_df.groupby('datetime')
         unique_timestamps = len(grouped)
         logger.info(f"  {unique_timestamps} timestamps uniques à traiter")
+
+        # Optionnel: précharger en mémoire toutes les images nécessaires (toutes les combinaisons timestamp+timesteps)
+        if Config.PRELOAD_IMAGES:
+            logger.info("Préchargement des images nécessaires (tous canaux, tous timesteps)...")
+            unique_ref_times = [pd.Timestamp(k) for k in grouped.groups.keys()]
+            all_target_times = set()
+            for ref_time in unique_ref_times:
+                for dt in Config.TIMESTEPS:
+                    all_target_times.add(ref_time + pd.Timedelta(hours=dt))
+            all_target_times = sorted(all_target_times)
+            logger.info(f"  → {len(all_target_times)} timestamps à précharger par canal")
+            for ch in Config.CHANNELS:
+                self.satellite_loader.preload_images_for_timestamps(all_target_times, ch)
         
         # Déterminer les dimensions depuis les datasets chargés
         img_h, img_w = None, None
@@ -901,6 +934,14 @@ def main():
                         help="Taille des chunks (nombre de samples) pour écriture intermédiaire.")
     parser.add_argument('--num-workers', type=int, default=None,
                         help=f"Nombre de processus parallèles (défaut: 1, max: {cpu_count()}). Utiliser 0 pour auto (tous les CPUs). Si non spécifié, une question sera posée.")
+    parser.add_argument('--use-dask', action='store_true',
+                        help="Activer Dask pour lecture lazy des NetCDF (chunks sur l'axe temps).")
+    parser.add_argument('--dask-chunk-time', type=int, required=False,
+                        help="Taille du chunk Dask sur l'axe temps (ex: 256).")
+    parser.add_argument('--preload-images', action='store_true',
+                        help="Précharger en mémoire toutes les images nécessaires (réduit fortement les I/O).")
+    parser.add_argument('--compression-level', type=int, required=False,
+                        help="Niveau de compression gzip (0-9). 0 = pas de compression (fichier énorme), 1 = rapide, 9 = maximum.")
     args = parser.parse_args()
 
     # Résoudre dataset_root (par défaut ./data si non fourni)
@@ -961,6 +1002,17 @@ def main():
     else:
         # num_workers spécifié en argument
         num_workers = cpu_count() if args.num_workers == 0 else args.num_workers
+
+    # Appliquer options d'optimisation NetCDF
+    if args.use_dask:
+        Config.USE_DASK = True
+    if args.dask_chunk_time:
+        Config.DASK_TIME_CHUNK = int(args.dask_chunk_time)
+    if args.preload_images:
+        Config.PRELOAD_IMAGES = True
+    if args.compression_level is not None:
+        lvl = max(0, min(9, int(args.compression_level)))
+        Config.COMPRESSION_LEVEL = lvl
 
     # Construire le dataset en injectant les dossiers d'input spécifiques
     builder = MLDatasetBuilder(output_path, satellite_dir=sat_dir, ground_dir=ground_dir,

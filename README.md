@@ -3,6 +3,24 @@
 
 Projet de prédiction météorologique par Machine Learning à partir de données satellites et de stations au sol.
 
+## TL;DR
+
+Générer directement le dataset pour la station de Bron (ID 69029001) sur SE 2016.
+
+- Windows PowerShell:
+
+```powershell
+python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 --data-root ".\meteonet\data_samples" --num-workers 1 --station-id 69029001 --use-dask
+```
+
+- Linux/macOS:
+
+```bash
+python weather-prophet/tests-louis/create_ml_dataset.py --zone SE --year 2016 --data-root ./meteonet/data_samples --num-workers 1 --station-id 69029001 --use-dask
+```
+
+Plus de détails et options (préchargement, compression, parallélisation) sont documentés ci-dessous.
+
 ## 🎯 Objectif du projet
 
 Créer un modèle de ML capable de **prédire les conditions météorologiques au sol** (température, humidité, précipitations, etc.) à partir d'**images satellites historiques**.
@@ -120,6 +138,31 @@ python create_ml_dataset.py --help
 - 🧮 Mémoire optimisée: pré-allocation EXACTE (deux passes)
   - Évite l’allocation catastrophique (ex: 371 GiB) en allouant uniquement le nombre de samples valides
 
+#### 📦 Lecture NetCDF optimisée (optionnel)
+
+- Dask (lazy loading): activez `--use-dask` pour ouvrir les NetCDF avec des chunks sur l’axe temps.
+  - Si Dask n’est pas installé, le script continue en mode standard et affiche un avertissement uniquement si `--use-dask` est demandé.
+  - Ajustez la taille de chunk avec `--dask-chunk-time 256` (par défaut 256).
+- Préchargement images: `--preload-images` met en cache en RAM toutes les combinaisons (timestamps × timesteps × canaux) nécessaires pour le run.
+  - Utile quand beaucoup de stations partagent les mêmes timestamps (réutilisation élevée), au prix d’une consommation RAM plus forte.
+- Compression ajustable: `--compression-level 0-9` (0 désactive la compression; 1 rapide; 9 maximum) pour équilibrer temps d’écriture et taille du fichier.
+
+Installation (Windows PowerShell):
+
+```powershell
+pip install "dask[complete]"
+```
+
+Exemples:
+
+```powershell
+# Lecture lazy avec Dask
+python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 --data-root ".\meteonet\data_samples" --num-workers 1 --use-dask
+
+# Dask + préchargement + compression plus rapide
+python "weather-prophet\tests-louis\create_ml_dataset.py" --zone SE --year 2016 --data-root ".\meteonet\data_samples" --num-workers 1 --use-dask --preload-images --compression-level 1
+```
+
 Résumé rapide des gains récents:
 
 - 14 min → ~2 min 40 s pour 4767 samples (gzip activé)
@@ -154,6 +197,10 @@ python create_ml_dataset.py \
 - `--build-final` : Merger des chunks existants sans reconstruire
 - `--merge-start` / `--merge-end` : Sélectionner la plage de chunks à merger
 - `--intermediate-dir` : Dossier pour fichiers temporaires
+- `--use-dask` : Active la lecture NetCDF avec Dask (lazy + chunks sur l’axe temps)
+- `--dask-chunk-time` : Taille de chunk Dask sur l’axe temps (ex: 256)
+- `--preload-images` : Précharger en mémoire toutes les images nécessaires (réduit les I/O)
+- `--compression-level` : Niveau gzip (0-9) pour l’écriture HDF5
 
 💡 **Astuce** : Pour traiter de gros datasets (plusieurs jours/mois), utilisez **toujours** `--save-intermediate` pour éviter de saturer la RAM et accélérer l'écriture finale.
 
