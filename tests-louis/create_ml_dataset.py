@@ -48,6 +48,10 @@ class Config:
 
     # Paramètres temporels (en heures)
     TIMESTEPS = [-12, -24, -48, -168]  # t-12h, t-1j, t-2j, t-7j
+    
+    
+    # NOUVEAU: Intervalle minimum entre 2 samples (en secondes, 0 = tous les samples)
+    SAMPLE_INTERVAL = 0  # 0 = désactivé, 3600 = 1h, 21600 = 6h, etc.
 
     # Canaux satellites
     CHANNELS = ['CT', 'IR039', 'IR108', 'VIS06', 'WV062']
@@ -370,7 +374,12 @@ class GroundStationDataLoader:
         # Trier par station et temps
         df = df.sort_values(['number_sta', 'datetime'])
         
-        # Construire l'index (station_id, timestamp) -> row_index
+        # NOUVEAU: Appliquer le filtre d'intervalle si configuré
+        if Config.SAMPLE_INTERVAL > 0:
+            logger.info(f"Application du filtre d'échantillonnage: {Config.SAMPLE_INTERVAL}s ({Config.SAMPLE_INTERVAL/3600:.1f}h)")
+            df = self._apply_sample_interval(df)
+            logger.info(f"  → {len(df)} mesures après filtrage")
+        
         logger.info(f"Construction de l'index temporel des stations...")
         for idx, row in df.iterrows():
             station_id = int(row['number_sta'])
@@ -390,6 +399,37 @@ class GroundStationDataLoader:
         
         self.data = df
         return df
+    
+    def _apply_sample_interval(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Applique un intervalle d'échantillonnage sur les timestamps.
+        Ne garde qu'un relevé tous les Config.SAMPLE_INTERVAL secondes par station.
+        """
+        filtered_rows = []
+        
+        for station_id in df['number_sta'].unique():
+            station_df = df[df['number_sta'] == station_id].copy()
+            
+            if len(station_df) == 0:
+                continue
+            
+            last_kept_time = None
+            
+            for idx, row in station_df.iterrows():
+                current_time = row['datetime']
+                
+                if last_kept_time is None:
+                    filtered_rows.append(row)
+                    last_kept_time = current_time
+                    continue
+                
+                time_diff = (current_time - last_kept_time).total_seconds()
+                
+                if time_diff >= Config.SAMPLE_INTERVAL:
+                    filtered_rows.append(row)
+                    last_kept_time = current_time
+        
+        return pd.DataFrame(filtered_rows).reset_index(drop=True)
     
     def get_measurement_at_time(self, station_id: int, target_time: pd.Timestamp) -> Optional[Dict]:
         """Récupère les mesures d'une station à un timestamp donné (avec recherche dichotomique)"""
@@ -962,6 +1002,9 @@ def main():
                         help="Niveau de compression gzip (0-9). 0 = pas de compression (fichier énorme), 1 = rapide, 9 = maximum.")
     parser.add_argument('--downsample-factor', type=int, required=False, choices=[1, 2, 5, 10], default=1,
                         help="Facteur de réduction spatiale des images (1=original 171×261, 2=moitié 86×131, 5=1/5 34×52, 10=1/10 17×26). Réduit la taille du fichier et accélère l'entraînement.")
+    parser.add_argument('--sample-interval', type=int, required=False, default=3600,
+                        help="Intervalle entre les échantillons (1=chaque échantillon, 2=chaque 2ème échantillon, etc.). Réduit la taille du fichier et accélère l'entraînement.")
+
     args = parser.parse_args()
 
     # Résoudre dataset_root (par défaut ./data si non fourni)
@@ -1036,6 +1079,10 @@ def main():
     if args.compression_level is not None:
         lvl = max(0, min(9, int(args.compression_level)))
         Config.COMPRESSION_LEVEL = lvl
+    
+    if args.sample_interval > 1:
+        Config.SAMPLE_INTERVAL = args.sample_interval
+        logger.info(f"Intervalle d'échantillonnage activé: {Config.SAMPLE_INTERVAL} (réduction de la taille du dataset)")
     
     # Appliquer downsampling spatial
     Config.DOWNSAMPLE_FACTOR = args.downsample_factor
