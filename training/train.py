@@ -18,6 +18,23 @@ def r2_score(pred, target):
     ss_tot = torch.sum((target - torch.mean(target, dim=0)) ** 2)
     return 1 - ss_res / ss_tot
 
+class R2Loss(nn.Module):
+    """
+    Fonction de perte basée sur le R².
+    À minimiser pour maximiser le coefficient de détermination.
+    """
+    def __init__(self, eps=1e-8):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, y_pred, y_true):
+        y_true_mean = torch.mean(y_true, dim=0, keepdim=True)
+        ss_res = torch.sum((y_true - y_pred) ** 2)
+        ss_tot = torch.sum((y_true - y_true_mean) ** 2)
+        r2 = 1 - ss_res / (ss_tot + self.eps)
+        return 1 - r2  # On minimise (1 - R²)
+
+
 
 def train_model(
     name: str, 
@@ -61,7 +78,7 @@ def train_model(
     val_loader = DataLoader(val_set, batch_size=batch_size)
     test_loader = DataLoader(test_set, batch_size=batch_size)
 
-    criterion = nn.MSELoss()
+    criterion = R2Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     writer = SummaryWriter(log_dir=f"runs/{name}_ds{len(dataset)}_lr{learning_rate}_bs{batch_size}_ep{num_epochs}")
@@ -213,5 +230,4 @@ def train_model(
         },
         'predictions': predictions_dict  # Ajouter les prédictions aux métriques
     }
-    print(predictions_dict)
     return model, optimizer, metrics
