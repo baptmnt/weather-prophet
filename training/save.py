@@ -19,7 +19,8 @@ def save_model_checkpoint(
     hyperparameters: Dict[str, Any],
     save_dir: str = "saved_models",
     include_timestamp: bool = True,
-    predictions: Optional[Any] = None
+    predictions: Optional[Any] = None,
+    output_parameters: Optional[Any] = ['dd', 'ff', 'precip', 'hu', 'td', 't', 'psl']
 ) -> Path:
     """
     Sauvegarde un checkpoint de modèle avec toutes les informations nécessaires.
@@ -103,6 +104,7 @@ def save_model_checkpoint(
             'save_date': datetime.now().isoformat(),
             'checkpoint_file': str(checkpoint_path), 
             'predictions': predictions,
+            'output_parameters': output_parameters
         }, f, indent=2)
     
     print(f"✅ Modèle sauvegardé:")
