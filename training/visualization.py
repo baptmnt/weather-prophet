@@ -36,7 +36,7 @@ def parse_model_name(model_name: str) -> Dict[str, str]:
         'dropout': 'Non spécifié',
         'downscaling': 'x1 (aucun)',
         'normalized': 'Non',
-        'loss_function': 'MSE (défaut)',
+        'loss_function': 'R² (défaut)',
         'excluded_vars': 'Aucune'
     }
     
@@ -519,7 +519,7 @@ def calculate_r2_score(json_path: Path) -> Optional[float]:
         return None
 
 
-def find_best_model(root_dir: Path, metric: str = 'mse', batch_only: bool = False) -> Optional[Tuple[Path, float, Optional[float]]]:
+def find_best_model(root_dir: Path, metric: str = 'r2', batch_only: bool = False) -> Optional[Tuple[Path, float, Optional[float]]]:
     """
     Trouve le meilleur modèle dans root_dir et sous-dossiers selon la métrique choisie.
     
