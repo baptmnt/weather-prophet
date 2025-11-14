@@ -9,6 +9,9 @@ __pycache__/
 temp_data/
 *.pth
 
+saved_models/*MultiChannelCNN*
+saved_models/*MultiTypeTemporalCorrelationCNN*
+
 runs/
 
 *.npz
@@ -16,7 +19,7 @@ runs/
 
 # HDF5 datasets (too large for git)
 *.h5
-datasets/*.h5
+datasets/*.h5 
 datasets/*.png
 
 # Distribution / packaging
