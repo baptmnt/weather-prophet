@@ -147,7 +147,7 @@ def run_one_training(
     # Nom modèle avec variables exclues
     dropout_tag = "wo-dropout" if dropout_p == 0 else f"dropout{int(round(dropout_p*100))}"
     excluded_tag = "-".join(EXCLUDED_VARS)  # "dd-precip"
-    run_name = f"BATCH-MultiChannelCNN-{dropout_tag}-ds{ds}-normalized-{excluded_tag}_lr{lr}_bs{batch_size}_ep{epochs}_y{base_year}"
+    run_name = "MCNN"  # placeholder; la fonction save_model_checkpoint reconstruira un nom compact
 
     # Vérifier si déjà entraîné
     if skip_existing and model_already_trained(run_name):
