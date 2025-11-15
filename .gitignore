@@ -9,8 +9,7 @@ __pycache__/
 temp_data/
 *.pth
 
-saved_models/*MultiChannelCNN*
-saved_models/*MultiTypeTemporalCorrelationCNN*
+saved_models/
 
 runs/
 
